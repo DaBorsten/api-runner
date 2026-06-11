@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "API Runner",
+  "version": "../package.json",
+  "identifier": "com.daborsten.api-runner",
+  "build": {
+    "beforeDevCommand": "bun run build:sidecar && bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bunx license-checker --out src-tauri/THIRD_PARTY_LICENSES.txt && bun run build:sidecar && bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "API Runner",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data: https://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJEMDNDMzBFRkYxMkY2ODUKUldTRjloTC9Ec01ETFRyL2RRalhlc1VFb241T2lPNGlQbnNRUm9ONk85R1RMT3ovcTZlZW9UVFoK",
+      "dialog": true,
+      "endpoints": [
+        "https://github.com/DaBorsten/api-runner/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": [
+      "binaries/newman-runner"
+    ],
+    "resources": [
+      "THIRD_PARTY_LICENSES.txt"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

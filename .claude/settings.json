@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat)",
+      "Read(//c/Users/DaBorsten/.claude/plans/**)",
+      "mcp__plugin_context-mode_context-mode__ctx_fetch_and_index",
+      "Bash(bun run *)",
+      "Bash(cargo build *)",
+      "Bash(cargo check *)",
+      "Bash(npx tsc *)",
+      "Bash(findstr /n \"step-panel\\\\|drop-zone\\\\|setup-divider\\\\|banner\" \"c:\\\\Users\\\\DaBorsten\\\\Desktop\\\\api-runner\\\\src\\\\App.css\")",
+      "Bash(Add-Content -Path 'c:\\\\Users\\\\DaBorsten\\\\Desktop\\\\api-runner\\\\src\\\\App.css' -Value '@ *)",
+      "Bash(npm run *)",
+      "Bash(Get-Content \"c:\\\\Users\\\\DaBorsten\\\\Desktop\\\\api-runner\\\\src\\\\App.css\")",
+      "Bash(Measure-Object -Line)",
+      "Bash(node -e \"const l = require\\('lucide-react'\\); console.log\\(Object.keys\\(l\\).filter\\(k => /laptop|monitor|computer|desktop/i.test\\(k\\)\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node -e \"const l = require\\('lucide-react'\\); console.log\\('CircleHalf' in l\\)\")",
+      "Bash(node -e \"const l = require\\('lucide-react'\\); console.log\\(Object.keys\\(l\\).filter\\(k => /moon|half|crescent/i.test\\(k\\)\\).join\\('\\\\n'\\)\\)\")",
+      "Read(//c/Users/DaBorsten/Projekte/Copilot-Plan-Exporter/**)",
+      "mcp__plugin_context-mode_context-mode__ctx_search",
+      "Bash(ls -la \"C:\\\\Users\\\\DaBorsten\\\\.claude\\\\plans\\\\\" 2>/dev/null || echo \"Plans directory does not exist yet\")",
+      "Read(//c/Users/DaBorsten/.claude/plans\" 2>/dev/**)"
+    ]
+  }
+}
