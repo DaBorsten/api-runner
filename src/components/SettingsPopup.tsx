@@ -94,9 +94,11 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
         setUpdateStatus("up-to-date");
         setStatusMsg(t("upToDate"));
       }
-    } catch {
+    } catch (err) {
       setUpdateStatus("error");
-      setStatusMsg(t("updateFailed"));
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMsg(`${t("updateFailed")}: ${msg}`);
+      console.error("[updater]", err);
     }
   }
 
@@ -115,9 +117,11 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
         }
       });
       await relaunch();
-    } catch {
+    } catch (err) {
       setUpdateStatus("error");
-      setStatusMsg(t("installFailed"));
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMsg(`${t("installFailed")}: ${msg}`);
+      console.error("[updater install]", err);
       setIsInstalling(false);
       setDownloadProgress(null);
     }
