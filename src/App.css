@@ -3630,7 +3630,10 @@ body.is-resizing * { cursor: col-resize !important; }
   border-color: var(--accent, #6366f1);
   color: #fff;
 }
-.sp-update-btn--available:hover {
+.sp-update-btn--available:hover:not(:disabled) {
+  background: var(--accent, #6366f1);
+  border-color: var(--accent, #6366f1);
+  color: #fff;
   filter: brightness(1.07);
 }
 
