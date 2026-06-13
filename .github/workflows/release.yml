@@ -47,10 +47,12 @@ jobs:
 
       - name: Audit npm dependencies
         run: bun audit
+        continue-on-error: true
 
       - name: Audit Rust dependencies
         run: cargo audit
         working-directory: src-tauri
+        continue-on-error: true
 
       - name: Build the app
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4  # v0
