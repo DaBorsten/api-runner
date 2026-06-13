@@ -33,10 +33,10 @@ jobs:
           bun-version: latest
 
       - name: install Rust stable
-        uses: dtolnay/rust-toolchain@42dc69e1aa15d09112580998cf2ef0119e2e91ae  # stable
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
 
       - name: Rust cache
-        uses: swatinem/rust-cache@fce9c6108b31ea247710505d3aaaa893ee6768d4  # v2
+        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae  # v2
         with:
           workspaces: './src-tauri -> target'
 
@@ -51,7 +51,7 @@ jobs:
         working-directory: src-tauri
 
       - name: Build the app
-        uses: tauri-apps/tauri-action@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # v0
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4  # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
