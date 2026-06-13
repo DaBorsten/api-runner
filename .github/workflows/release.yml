@@ -5,9 +5,11 @@ on:
     tags:
       - 'v*'
 
-# This workflow will trigger on each push to the `release` branch to create or update a GitHub release, build your app, and upload the artifacts to the release.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
 
 jobs:
   release:
@@ -23,26 +25,33 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
           bun-version: latest
 
       - name: install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@42dc69e1aa15d09112580998cf2ef0119e2e91ae  # stable
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@fce9c6108b31ea247710505d3aaaa893ee6768d4  # v2
         with:
           workspaces: './src-tauri -> target'
 
       - name: Install frontend dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
+
+      - name: Audit npm dependencies
+        run: bun audit
+
+      - name: Audit Rust dependencies
+        run: cargo audit
+        working-directory: src-tauri
 
       - name: Build the app
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

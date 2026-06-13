@@ -108,6 +108,22 @@ export interface RequestResult {
   iteration: number;
 }
 
+// Authoritative run statistics from newman's JSON report (`run.stats` /
+// `run.timings`), used instead of scraping the human-readable CLI table.
+export interface RunStats {
+  iterations: number;
+  requests_total: number;
+  requests_failed: number;
+  assertions_total: number;
+  assertions_failed: number;
+  duration_ms: number;
+}
+
+export interface NewmanRunResult {
+  results: RequestResult[];
+  stats: RunStats;
+}
+
 export type RunStatus = "idle" | "running" | "done" | "error";
 
 export type Step = 0 | 1 | 2 | 3 | 4 | 5;
@@ -141,10 +157,12 @@ export type AppAction =
   | { type: "SET_API_KEYS"; payload: ApiKeyEntry[] }
   | { type: "ADD_API_KEY"; payload: ApiKeyEntry }
   | { type: "REMOVE_API_KEY"; payload: string }
+  | { type: "RENAME_API_KEY"; payload: { id: string; label: string } }
   | { type: "SET_ACTIVE_API_KEY"; payload: string | null }
   | { type: "SET_LOCAL_COLLECTIONS"; payload: LocalCollection[] }
   | { type: "ADD_LOCAL_COLLECTION"; payload: LocalCollection }
   | { type: "REMOVE_LOCAL_COLLECTION"; payload: string }
+  | { type: "RENAME_LOCAL_COLLECTION"; payload: { id: string; name: string } }
   | { type: "SELECT_LOCAL_COLLECTION"; payload: LocalCollection | null }
   | { type: "SET_WORKSPACES"; payload: Workspace[] }
   | { type: "SELECT_WORKSPACE"; payload: string }
@@ -158,6 +176,7 @@ export type AppAction =
   | { type: "SET_STEP"; payload: Step }
   | { type: "RUN_START" }
   | { type: "RUN_OUTPUT"; payload: string }
+  | { type: "RUN_OUTPUT_BATCH"; payload: string[] }
   | { type: "RUN_DONE"; payload: number }
   | { type: "RUN_CANCEL" }
   | { type: "SET_REQUEST_RESULTS"; payload: RequestResult[] }

@@ -1,6 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Folder, X } from "lucide-react";
+import { Folder, Play, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AppAction, AppState } from "../types";
 
@@ -114,7 +114,7 @@ export function RunConfig({ state, dispatch, onRun, canRun }: Props) {
           onClick={onRun}
           disabled={!canRun}
         >
-          ▶ Run {state.runConfig.folder ? `"${state.runConfig.folder}"` : (state.selectedLocalCollection?.name ?? state.selectedCollection?.name ?? "")}
+          <Play size={13} /> Run {state.runConfig.folder ? `"${state.runConfig.folder}"` : (state.selectedLocalCollection?.name ?? state.selectedCollection?.name ?? "")}
         </button>
       </div>
     </div>

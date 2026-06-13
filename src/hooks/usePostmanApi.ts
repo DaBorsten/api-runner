@@ -46,6 +46,10 @@ export function usePostmanApi() {
     await invoke("save_api_key", { id, label, key });
   }
 
+  async function renameApiKey(id: string, label: string): Promise<void> {
+    await invoke("rename_api_key", { id, label });
+  }
+
   async function deleteApiKey(id: string): Promise<void> {
     await invoke("delete_api_key", { id });
   }
@@ -147,6 +151,7 @@ export function usePostmanApi() {
   return {
     getApiKeys,
     saveApiKey,
+    renameApiKey,
     deleteApiKey,
     getLocalCollections,
     saveLocalCollection,

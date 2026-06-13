@@ -43,7 +43,10 @@ export function RunSummary({ run, onNewRun, onRerun }: Props) {
     ? Math.max(...run.requestResults.map(r => r.response_time))
     : 0;
 
-  const assertions = parseCount(run.outputLines, /assertions\s+(\d+)/);
+  // Prefer the authoritative JSON-report count; fall back to scraping the CLI
+  // table for runs recorded before that field existed.
+  const assertions = run.assertionsTotal ?? parseCount(run.outputLines, /assertions\s+(\d+)/);
+  const passedDenominator = run.checksTotal ?? run.total;
   const recentResponses = run.requestResults.slice(0, 5);
 
   return (
@@ -63,64 +66,66 @@ export function RunSummary({ run, onNewRun, onRerun }: Props) {
         </button>
       </div>
 
-      {tab === "console" && (
-        <div className="console-output console-output--summary">
-          {run.outputLines.filter(l => !l.startsWith("__exit:")).map((line, i) => {
-            const clean = stripAnsi(line);
-            return <div key={i} className={`console-line ${getConsoleLineClass(clean)}`}>{clean}</div>;
-          })}
-          {run.outputLines.length === 0 && <div className="console-line">{t("noOutput")}</div>}
-        </div>
-      )}
-
-      {tab === "summary" && (
-        <>
-          <div className="result-stat-grid">
-            <StatCard label="PASSED" value={`${run.passed}`} sub={`/${run.total}`} highlight={success ? "pass" : undefined} />
-            <StatCard label="ASSERTIONS" value={String(assertions)} sub={assertions === 0 ? "no scripts" : undefined} />
-            <StatCard
-              label="AVG LATENCY"
-              value={`${avgLatency}`}
-              unit="ms"
-              sub={`range ${minLatency}-${maxLatency}ms`}
-            />
-            <StatCard
-              label="DATA ROWS"
-              value={String(run.total)}
-              sub={run.runConfig.dataFile ? run.runConfig.dataFile.split(/[\\/]/).pop() : undefined}
-            />
+      <div className="result-panel-scroll">
+        {tab === "console" && (
+          <div className="console-output console-output--summary">
+            {run.outputLines.filter(l => !l.startsWith("__exit:")).map((line, i) => {
+              const clean = stripAnsi(line);
+              return <div key={i} className={`console-line ${getConsoleLineClass(clean)}`}>{clean}</div>;
+            })}
+            {run.outputLines.length === 0 && <div className="console-line">{t("noOutput")}</div>}
           </div>
+        )}
 
-          <div className="result-charts-row">
-            <div ref={leftCardRef} className="result-section result-section--chart">
-              <div className="result-section-header">
-                <span className="result-section-title">{t("responseTime")}</span>
-                <span className="result-section-meta">{t("msOver", { count: run.total })}</span>
-              </div>
-              <ResponseChart results={run.requestResults} noDataText={t("noData")} />
+        {tab === "summary" && (
+          <>
+            <div className="result-stat-grid">
+              <StatCard label="PASSED" value={`${run.passed}`} sub={`/${passedDenominator}`} highlight={success ? "pass" : undefined} />
+              <StatCard label="ASSERTIONS" value={String(assertions)} sub={assertions === 0 ? "no scripts" : undefined} />
+              <StatCard
+                label="AVG LATENCY"
+                value={`${avgLatency}`}
+                unit="ms"
+                sub={`range ${minLatency}-${maxLatency}ms`}
+              />
+              <StatCard
+                label="DATA ROWS"
+                value={String(run.total)}
+                sub={run.runConfig.dataFile ? run.runConfig.dataFile.split(/[\\/]/).pop() : undefined}
+              />
             </div>
 
-            <div ref={rightCardRef} className="result-section result-section--responses">
-              <div className="result-section-header">
-                <span className="result-section-title">{t("recentResponses")}</span>
-                <span className="result-section-meta">{t("latest", { count: recentResponses.length })}</span>
+            <div className="result-charts-row">
+              <div ref={leftCardRef} className="result-section result-section--chart">
+                <div className="result-section-header">
+                  <span className="result-section-title">{t("responseTime")}</span>
+                  <span className="result-section-meta">{t("msOver", { count: run.total })}</span>
+                </div>
+                <ResponseChart results={run.requestResults} noDataText={t("noData")} />
               </div>
-              <div className="recent-responses">
-                {recentResponses.map((r, i) => (
-                  <RecentResponseRow key={i} result={r} index={i + 1} />
-                ))}
-                {recentResponses.length === 0 && (
-                  <div className="drawer-empty">{t("noResponses")}</div>
-                )}
+
+              <div ref={rightCardRef} className="result-section result-section--responses">
+                <div className="result-section-header">
+                  <span className="result-section-title">{t("recentResponses")}</span>
+                  <span className="result-section-meta">{t("latest", { count: recentResponses.length })}</span>
+                </div>
+                <div className="recent-responses">
+                  {recentResponses.map((r, i) => (
+                    <RecentResponseRow key={i} result={r} index={i + 1} />
+                  ))}
+                  {recentResponses.length === 0 && (
+                    <div className="drawer-empty">{t("noResponses")}</div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
 
-          {run.requestResults.length > 0 && (
-            <AllResponsesSection results={run.requestResults} showIter={run.total > 1} title={t("allResponses")} emptyResponse={t("emptyResponse")} />
-          )}
-        </>
-      )}
+            {run.requestResults.length > 0 && (
+              <AllResponsesSection results={run.requestResults} showIter={run.total > 1} title={t("allResponses")} emptyResponse={t("emptyResponse")} />
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

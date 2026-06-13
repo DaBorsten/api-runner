@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Folder, FolderOpen, X, Check, ChevronDown, ChevronRight, Minus, Plus, Play, Key, FileText, RefreshCw, AlertCircle, Upload, Globe } from "lucide-react";
+import { Folder, FolderOpen, X, Check, ChevronDown, ChevronRight, Minus, Plus, Play, Key, FileText, RefreshCw, AlertCircle, Upload, Globe, ArrowLeft } from "lucide-react";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ApiKeyEntry, AppAction, AppState, CollectionItem, CollectionRequest, isFolder, SourceSnapshot, WorkspaceSnapshot } from "../types";
 import { usePostmanApi } from "../hooks/usePostmanApi";
+import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 import { DataFilePreview } from "./DataFilePreview";
 import { RequestBodyViewer } from "./RequestBodyViewer";
 
@@ -65,6 +66,17 @@ function getFlatVisibleRequestIds(items: CollectionItem[], expandedIds: Set<stri
 
 export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage, snapshots, syncStatus }: Props) {
   const { t } = useTranslation();
+
+  // One-time warning before importing a local collection (its scripts run on the
+  // user's machine). Shared by the file-picker and drag-and-drop import paths.
+  const ensureLocalTrust = () =>
+    confirmLocalCollectionTrust({
+      title: t("localTrustTitle"),
+      message: t("localTrustMessage"),
+      okLabel: t("localTrustOk"),
+      cancelLabel: t("localTrustCancel"),
+    });
+
   const [folderItems, setFolderItems] = useState<CollectionItem[]>([]);
   const [foldersLoading, setFoldersLoading] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -189,6 +201,11 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   const [popupTab, setPopupTab] = useState<"apikey" | "file">("apikey");
   const [inputLabel, setInputLabel] = useState("");
   const [inputKey, setInputKey] = useState("");
+  const [inputLocalName, setInputLocalName] = useState("");
+  const [pendingLocalFile, setPendingLocalFile] = useState<{ path: string; defaultName: string } | null>(null);
+  const [renamingColId, setRenamingColId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [showManageDialog, setShowManageDialog] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dragging, setDragging] = useState<"idle" | "valid" | "invalid">("idle");
   const dragCounter = useRef(0);
@@ -199,7 +216,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
 
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     const stored = localStorage.getItem("config-right-width");
-    return stored ? parseInt(stored, 10) : 300;
+    return stored ? Math.max(320, parseInt(stored, 10)) : 320;
   });
   const rightResizing = useRef(false);
   const rightResizeStartX = useRef(0);
@@ -219,19 +236,16 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
         setDragging("idle");
       } else if (event.payload.type === "drop") {
         setDragging("idle");
-        console.log("[drop] payload:", JSON.stringify(event.payload));
         const path = event.payload.paths?.[0];
-        if (!path) { console.warn("[drop] no path"); return; }
-        if (!path.toLowerCase().endsWith(".json")) { console.warn("[drop] not json:", path); return; }
+        if (!path) return;
+        if (!path.toLowerCase().endsWith(".json")) return;
         const fileName = path.split(/[\\/]/).pop() ?? path;
-        const name = fileName.replace(/\.json$/i, "");
-        const id = `local_${Date.now()}`;
-        api.saveLocalCollection(id, name, path)
-          .then(() => {
-            dispatch({ type: "ADD_LOCAL_COLLECTION", payload: { id, name, path } });
-            setShowAddPopup(false);
-          })
-          .catch((err) => console.error("[drop] saveLocalCollection failed:", err));
+        const defaultName = fileName.replace(/\.json$/i, "");
+        ensureLocalTrust().then((trusted) => {
+          if (!trusted) return;
+          setPendingLocalFile({ path, defaultName });
+          setInputLocalName(defaultName);
+        }).catch((err) => console.error("[drop] trust check failed:", err));
       }
     }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
@@ -266,19 +280,28 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
 
   useEffect(() => {
     if (openDropdown !== "environment") return;
-    function onClickOutside(e: MouseEvent) {
-      if (envDropdownRef.current && !envDropdownRef.current.contains(e.target as Node)) {
+    let downOutside = false;
+    function onDown(e: MouseEvent) {
+      downOutside = !!(envDropdownRef.current && !envDropdownRef.current.contains(e.target as Node));
+    }
+    function onUp(e: MouseEvent) {
+      if (downOutside && envDropdownRef.current && !envDropdownRef.current.contains(e.target as Node)) {
         setOpenDropdown(null);
       }
+      downOutside = false;
     }
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("mouseup", onUp);
+    };
   }, [openDropdown]);
 
   useEffect(() => {
     function onMove(e: MouseEvent) {
       if (!rightResizing.current) return;
-      const w = Math.max(220, Math.min(500, rightResizeStartW.current + rightResizeStartX.current - e.clientX));
+      const w = Math.max(320, Math.min(500, rightResizeStartW.current + rightResizeStartX.current - e.clientX));
       setRightPanelWidth(w);
       rightWidthRef.current = w;
     }
@@ -432,11 +455,23 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       multiple: false,
     });
     if (!selected || typeof selected !== "string") return;
+    if (!(await ensureLocalTrust())) return;
     const fileName = selected.split(/[\\/]/).pop() ?? selected;
-    const name = fileName.replace(/\.json$/i, "");
+    const defaultName = fileName.replace(/\.json$/i, "");
+    setPendingLocalFile({ path: selected, defaultName });
+    setInputLocalName(defaultName);
+  }
+
+  async function confirmImportCollection() {
+    if (!pendingLocalFile) return;
+    const name = inputLocalName.trim() || pendingLocalFile.defaultName;
     const id = `local_${Date.now()}`;
-    await api.saveLocalCollection(id, name, selected);
-    dispatch({ type: "ADD_LOCAL_COLLECTION", payload: { id, name, path: selected } });
+    await api.saveLocalCollection(id, name, pendingLocalFile.path);
+    const newCol = { id, name, path: pendingLocalFile.path };
+    dispatch({ type: "ADD_LOCAL_COLLECTION", payload: newCol });
+    dispatch({ type: "SELECT_LOCAL_COLLECTION", payload: newCol });
+    setPendingLocalFile(null);
+    setInputLocalName("");
     setShowAddPopup(false);
   }
 
@@ -460,6 +495,18 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     dataRowUserChangedRef.current = false;
     setConfig({ iterations: selectedCount });
   }, [cfg.dataRowIndices, dataRowTotal]);
+
+  useEffect(() => {
+    if (!showAddPopup) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setShowAddPopup(false);
+      }
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [showAddPopup]);
 
   // Close the open data preview with Escape (capture so it wins over any
   // page-level Escape handler that would otherwise close the whole config).
@@ -537,11 +584,32 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
         <BreadcrumbChip
           label={t("source")}
           value={sourceLabel}
-          badge={sourceType}
-          badgeClass={sourceType === "API" ? "source-chip--api" : "source-chip--local"}
+          valueClass={sourceType === "API" ? "bc-chip-value--api" : sourceType ? "bc-chip-value--local" : undefined}
           open={openDropdown === "source"}
           onToggle={() => setOpenDropdown(openDropdown === "source" ? null : "source")}
           onClose={() => setOpenDropdown(null)}
+          action={activeKey && !state.selectedLocalCollection ? (
+            <button
+              className={`bc-chip-sync-btn${syncStatus === "error" ? " bc-chip-sync-btn--error" : ""}`}
+              title={
+                syncStatus === "error" && state.lastSyncError
+                  ? t("syncErrorTitle", { error: state.lastSyncError })
+                  : snapshots?.[activeKey.id]
+                    ? t("syncTitleLast", { date: new Date(snapshots[activeKey.id].synced_at * 1000).toLocaleString() })
+                    : t("syncTitleNever")
+              }
+              onClick={handleRefresh}
+              disabled={syncStatus === "syncing"}
+            >
+              {syncStatus === "syncing" ? (
+                <span className="bc-refresh-spinner" />
+              ) : syncStatus === "error" ? (
+                <AlertCircle size={11} />
+              ) : (
+                <RefreshCw size={11} />
+              )}
+            </button>
+          ) : undefined}
         >
           <div className="bc-dropdown-section">
             <div className="bc-dropdown-header">{t("sources", { count: state.apiKeys.length + state.localCollections.length })}</div>
@@ -567,20 +635,8 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                   setOpenDropdown(null);
                 }}
               >
-                <span className="bc-dropdown-name">{k.label}</span>
+                <span className={`bc-dropdown-name${k.id === state.activeApiKeyId && !state.selectedLocalCollection ? " bc-dropdown-name--api-active" : ""}`}>{k.label}</span>
                 <span className="source-chip source-chip--api">API</span>
-                {k.id === state.activeApiKeyId && !state.selectedLocalCollection && <span className="bc-check"><Check size={12} /></span>}
-                <button
-                  className="bc-dropdown-delete"
-                  title={t("removeSource")}
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    const ok = await confirm(t("removeSourceConfirm", { name: k.label }), { title: t("removeSourceTitle"), kind: "warning" });
-                    if (!ok) return;
-                    await api.deleteApiKey(k.id);
-                    dispatch({ type: "REMOVE_API_KEY", payload: k.id });
-                  }}
-                ><X size={14} /></button>
               </div>
             ))}
             {state.localCollections.map((col) => (
@@ -592,49 +648,19 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                   setOpenDropdown(null);
                 }}
               >
-                <span className="bc-dropdown-name">{col.name}</span>
+                <span className={`bc-dropdown-name${state.selectedLocalCollection?.id === col.id ? " bc-dropdown-name--local-active" : ""}`}>{col.name}</span>
                 <span className="source-chip source-chip--local">{t("local")}</span>
-                {state.selectedLocalCollection?.id === col.id && <span className="bc-check"><Check size={12} /></span>}
-                <button
-                  className="bc-dropdown-delete"
-                  title={t("removeSource")}
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    const ok = await confirm(t("removeSourceConfirm", { name: col.name }), { title: t("removeSourceTitle"), kind: "warning" });
-                    if (!ok) return;
-                    await api.deleteLocalCollection(col.id);
-                    dispatch({ type: "REMOVE_LOCAL_COLLECTION", payload: col.id });
-                  }}
-                ><X size={14} /></button>
               </div>
             ))}
-            <div className="bc-dropdown-add" onClick={() => { setOpenDropdown(null); setShowAddPopup(true); }}>{t("addSource")}</div>
+            {(state.apiKeys.length > 0 || state.localCollections.length > 0) && (
+              <div className="bc-dropdown-manage" onClick={() => { setOpenDropdown(null); setShowManageDialog(true); }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                {t("manageSources")}
+              </div>
+            )}
+            <div className="bc-dropdown-add" onClick={() => { setOpenDropdown(null); setShowAddPopup(true); }} style={{ display: "flex", alignItems: "center", gap: "6px" }}><Plus size={13} style={{ flexShrink: 0 }} />{t("addSource")}</div>
           </div>
         </BreadcrumbChip>
-
-        {activeKey && !state.selectedLocalCollection && (
-          <button
-            className={`bc-refresh-btn${syncStatus === "error" ? " bc-refresh-btn--error" : ""}`}
-            title={
-              syncStatus === "error" && state.lastSyncError
-                ? t("syncErrorTitle", { error: state.lastSyncError })
-                : snapshots?.[activeKey.id]
-                  ? t("syncTitleLast", { date: new Date(snapshots[activeKey.id].synced_at * 1000).toLocaleString() })
-                  : t("syncTitleNever")
-            }
-            onClick={handleRefresh}
-            disabled={syncStatus === "syncing"}
-          >
-            {syncStatus === "syncing" ? (
-              <span className="bc-refresh-spinner" />
-            ) : syncStatus === "error" ? (
-              <AlertCircle size={13} />
-            ) : (
-              <RefreshCw size={13} />
-            )}
-            {syncStatus === "syncing" ? t("syncing") : syncStatus === "error" ? t("syncError") : t("sync")}
-          </button>
-        )}
 
         {!state.selectedLocalCollection && (
           <>
@@ -668,7 +694,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                       setOpenDropdown(null);
                     }}
                   >
-                    <span>{ws.name}</span>
+                    <span className="bc-dropdown-name">{ws.name}</span>
                     <span className="bc-dropdown-count">{ws.workspace_type ?? ""}</span>
                     {state.selectedWorkspace === ws.id && <span className="bc-check"><Check size={12} /></span>}
                   </div>
@@ -700,7 +726,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                       setOpenDropdown(null);
                     }}
                   >
-                    <span>{col.name}</span>
+                    <span className="bc-dropdown-name">{col.name}</span>
                     {state.selectedCollection?.uid === col.uid && <span className="bc-check"><Check size={12} /></span>}
                   </div>
                 ))}
@@ -803,21 +829,34 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       <div className="drawer-footer config-page-footer">
         <button className="btn" onClick={onClose}>{t("cancel")}</button>
         <button className="btn btn--primary btn--run" onClick={onRun} disabled={!runEnabled}>
-          <Play size={13} /> {t("runButton", { name: selectedName })}
+          <Play size={13} /> {state.selectedLocalCollection ? t("run") : t("runButton", { name: selectedName })}
         </button>
       </div>
 
+      {showManageDialog && (
+        <ManageSourcesDialog
+          state={state}
+          dispatch={dispatch}
+          api={api}
+          onClose={() => setShowManageDialog(false)}
+          renamingColId={renamingColId}
+          setRenamingColId={setRenamingColId}
+          renameValue={renameValue}
+          setRenameValue={setRenameValue}
+        />
+      )}
+
       {showAddPopup && (
-        <div className="popup-overlay" onClick={() => setShowAddPopup(false)}>
-          <div className="popup" ref={popupRef} onClick={(e) => e.stopPropagation()}>
+        <div className="popup-overlay" onMouseDown={() => { setShowAddPopup(false); setPendingLocalFile(null); setInputLocalName(""); }}>
+          <div className="popup" ref={popupRef} onMouseDown={(e) => e.stopPropagation()}>
             <div className="popup-header">
               <span className="popup-title">{t("addSourceTitle")}</span>
-              <button className="popup-close" onClick={() => setShowAddPopup(false)}><X size={14} /></button>
+              <button className="popup-close" onClick={() => { setShowAddPopup(false); setPendingLocalFile(null); setInputLocalName(""); }}><X size={14} /></button>
             </div>
             <div className="popup-tabs">
               <button
                 className={`popup-tab ${popupTab === "apikey" ? "popup-tab--active" : ""}`}
-                onClick={() => setPopupTab("apikey")}
+                onClick={() => { setPopupTab("apikey"); setPendingLocalFile(null); setInputLocalName(""); }}
               >
                 <Key size={13} /> {t("apiKeyTab")}
               </button>
@@ -860,19 +899,46 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
             )}
             {popupTab === "file" && (
               <div className="popup-body">
-                <div
-                  className={`drop-zone ${dragging === "valid" ? "drop-zone--active" : dragging === "invalid" ? "drop-zone--invalid" : ""}`}
-                  onDragEnter={(e) => { e.preventDefault(); dragCounter.current++; }}
-                  onDragLeave={(e) => { e.preventDefault(); dragCounter.current--; if (dragCounter.current === 0) setDragging("idle"); }}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={handleDropPopup}
-                  onClick={handleImportCollection}
-                >
-                  <span className="drop-zone-icon"><FolderOpen size={32} /></span>
-                  <span className="drop-zone-text">
-                    {dragging ? t("dropRelease") : t("dropOrClickShort")}
-                  </span>
-                </div>
+                {!pendingLocalFile ? (
+                  <div
+                    className={`drop-zone ${dragging === "valid" ? "drop-zone--active" : dragging === "invalid" ? "drop-zone--invalid" : ""}`}
+                    onDragEnter={(e) => { e.preventDefault(); dragCounter.current++; }}
+                    onDragLeave={(e) => { e.preventDefault(); dragCounter.current--; if (dragCounter.current === 0) setDragging("idle"); }}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={handleDropPopup}
+                    onClick={handleImportCollection}
+                  >
+                    <span className="drop-zone-icon"><FolderOpen size={32} /></span>
+                    <span className="drop-zone-text">
+                      {dragging ? t("dropRelease") : t("dropOrClickShort")}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="field-col">
+                    <div className="local-file-selected">
+                      <FileText size={14} />
+                      <span className="local-file-selected-name">{pendingLocalFile.path.split(/[\\/]/).pop()}</span>
+                    </div>
+                    <input
+                      className="input"
+                      type="text"
+                      placeholder={t("localNamePlaceholder")}
+                      value={inputLocalName}
+                      onChange={(e) => setInputLocalName(e.target.value)}
+                      autoFocus
+                      onKeyDown={(e) => e.key === "Enter" && confirmImportCollection()}
+                    />
+                    <div className="popup-actions-row">
+                      <button className="btn" onClick={() => { setPendingLocalFile(null); setInputLocalName(""); }} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <ArrowLeft size={14} />
+                        {t("back")}
+                      </button>
+                      <button className="btn btn--primary" onClick={confirmImportCollection}>
+                        {t("add")}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -994,7 +1060,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                       className={`bc-dropdown-item ${state.selectedEnvironmentUid === null ? "bc-dropdown-item--active" : ""}`}
                       onClick={() => { dispatch({ type: "SELECT_ENVIRONMENT", payload: null }); setOpenDropdown(null); }}
                     >
-                      <span>{t("noEnvironment")}</span>
+                      <span className="bc-dropdown-name">{t("noEnvironment")}</span>
                       {state.selectedEnvironmentUid === null && <span className="bc-check"><Check size={12} /></span>}
                     </div>
                     {state.environments.map((env) => (
@@ -1003,7 +1069,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                         className={`bc-dropdown-item ${state.selectedEnvironmentUid === env.uid ? "bc-dropdown-item--active" : ""}`}
                         onClick={() => { dispatch({ type: "SELECT_ENVIRONMENT", payload: env.uid }); setConfig({ envFile: null }); setOpenDropdown(null); }}
                       >
-                        <span>{env.name}</span>
+                        <span className="bc-dropdown-name">{env.name}</span>
                         {state.selectedEnvironmentUid === env.uid && <span className="bc-check"><Check size={12} /></span>}
                       </div>
                     ))}
@@ -1043,7 +1109,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
           <div className="config-summary-label">{t("iterations")}</div>
           <div className="iter-control" style={{ marginTop: 4 }}>
             <button className="iter-btn" {...holdDecrement}>−</button>
-            <span className="iter-value">{cfg.iterations}</span>
+            <span className="iter-value" key={cfg.iterations}>{cfg.iterations}</span>
             <button className="iter-btn" {...holdIncrement}>+</button>
           </div>
         </div>
@@ -1051,6 +1117,151 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       </div>
     );
   }
+}
+
+/* ── ManageSourcesDialog ────────────────────────────────────────────────────── */
+interface ManageSourcesDialogProps {
+  state: AppState;
+  dispatch: React.Dispatch<AppAction>;
+  api: ReturnType<typeof usePostmanApi>;
+  onClose: () => void;
+  renamingColId: string | null;
+  setRenamingColId: (id: string | null) => void;
+  renameValue: string;
+  setRenameValue: (v: string) => void;
+}
+
+function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, setRenamingColId, renameValue, setRenameValue }: ManageSourcesDialogProps) {
+  const { t } = useTranslation();
+  const [renamingKeyId, setRenamingKeyId] = useState<string | null>(null);
+  const [renameKeyValue, setRenameKeyValue] = useState("");
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        if (renamingKeyId) { setRenamingKeyId(null); return; }
+        if (renamingColId) { setRenamingColId(null); return; }
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose, renamingKeyId, renamingColId]);
+
+  async function handleDeleteApiKey(k: import("../types").ApiKeyEntry) {
+    const ok = await confirm(t("removeSourceConfirm", { name: k.label }), { title: t("removeSourceTitle"), kind: "warning" });
+    if (!ok) return;
+    await api.deleteApiKey(k.id);
+    dispatch({ type: "REMOVE_API_KEY", payload: k.id });
+  }
+
+  async function handleSaveKeyRename(k: import("../types").ApiKeyEntry) {
+    const name = renameKeyValue.trim() || k.label;
+    await api.renameApiKey(k.id, name);
+    dispatch({ type: "RENAME_API_KEY", payload: { id: k.id, label: name } });
+    setRenamingKeyId(null);
+  }
+
+  async function handleDeleteLocalCol(col: import("../types").LocalCollection) {
+    const ok = await confirm(t("removeSourceConfirm", { name: col.name }), { title: t("removeSourceTitle"), kind: "warning" });
+    if (!ok) return;
+    await api.deleteLocalCollection(col.id);
+    dispatch({ type: "REMOVE_LOCAL_COLLECTION", payload: col.id });
+  }
+
+  async function handleSaveColRename(col: import("../types").LocalCollection) {
+    const name = renameValue.trim() || col.name;
+    await api.saveLocalCollection(col.id, name, col.path);
+    dispatch({ type: "RENAME_LOCAL_COLLECTION", payload: { id: col.id, name } });
+    setRenamingColId(null);
+  }
+
+  return (
+    <div className="popup-overlay" onMouseDown={onClose}>
+      <div className="popup manage-sources-dialog" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="popup-header">
+          <span className="popup-title">{t("manageSourcesTitle")}</span>
+          <button className="popup-close" onClick={onClose}><X size={14} /></button>
+        </div>
+        <div className="popup-body manage-sources-body">
+          {state.apiKeys.map((k) => (
+            <div key={k.id} className="manage-source-row">
+              <span className="source-chip source-chip--api">API</span>
+              {renamingKeyId === k.id ? (
+                <>
+                  <input
+                    className="bc-rename-input manage-rename-input"
+                    value={renameKeyValue}
+                    autoFocus
+                    onChange={(e) => setRenameKeyValue(e.target.value)}
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter") await handleSaveKeyRename(k);
+                      else if (e.key === "Escape") setRenamingKeyId(null);
+                    }}
+                  />
+                  <button className="bc-rename-confirm" onClick={() => handleSaveKeyRename(k)}><Check size={15} /></button>
+                  <button className="bc-rename-cancel" onClick={() => setRenamingKeyId(null)}><X size={15} /></button>
+                </>
+              ) : (
+                <>
+                  <span className="manage-source-name">{k.label}</span>
+                  <button
+                    className="manage-source-btn"
+                    title={t("renameSource")}
+                    onClick={() => { setRenamingKeyId(k.id); setRenameKeyValue(k.label); }}
+                  ><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+                  <button
+                    className="manage-source-btn manage-source-btn--delete"
+                    title={t("removeSource")}
+                    onClick={() => handleDeleteApiKey(k)}
+                  ><X size={15} /></button>
+                </>
+              )}
+            </div>
+          ))}
+          {state.localCollections.map((col) => (
+            <div key={col.id} className="manage-source-row">
+              <span className="source-chip source-chip--local">{t("local")}</span>
+              {renamingColId === col.id ? (
+                <>
+                  <input
+                    className="bc-rename-input manage-rename-input"
+                    value={renameValue}
+                    autoFocus
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter") await handleSaveColRename(col);
+                      else if (e.key === "Escape") setRenamingColId(null);
+                    }}
+                  />
+                  <button className="bc-rename-confirm" onClick={() => handleSaveColRename(col)}><Check size={15} /></button>
+                  <button className="bc-rename-cancel" onClick={() => setRenamingColId(null)}><X size={15} /></button>
+                </>
+              ) : (
+                <>
+                  <span className="manage-source-name">{col.name}</span>
+                  <button
+                    className="manage-source-btn"
+                    title={t("renameSource")}
+                    onClick={() => { setRenamingColId(col.id); setRenameValue(col.name); }}
+                  ><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+                  <button
+                    className="manage-source-btn manage-source-btn--delete"
+                    title={t("removeSource")}
+                    onClick={() => handleDeleteLocalCol(col)}
+                  ><X size={15} /></button>
+                </>
+              )}
+            </div>
+          ))}
+          {state.apiKeys.length === 0 && state.localCollections.length === 0 && (
+            <div className="manage-sources-empty">{t("noSources", "No sources configured.")}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ── useHoldRepeat ───────────────────────────────────────────────────────────── */
@@ -1084,39 +1295,60 @@ function useHoldRepeat(action: () => void, delay = 350, interval = 80) {
 interface BreadcrumbChipProps {
   label: string;
   value: string;
+  valueClass?: string;
   badge?: string | null;
   badgeClass?: string;
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
   disabled?: boolean;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function BreadcrumbChip({ label, value, badge, badgeClass, open, onToggle, onClose, disabled, children }: BreadcrumbChipProps) {
+function BreadcrumbChip({ label, value, valueClass, badge, badgeClass, open, onToggle, onClose, disabled, action, children }: BreadcrumbChipProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    let downOutside = false;
+    function onDown(e: MouseEvent) {
+      downOutside = !!(ref.current && !ref.current.contains(e.target as Node));
     }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    function onUp(e: MouseEvent) {
+      if (downOutside && ref.current && !ref.current.contains(e.target as Node)) {
+        onClose();
+      }
+      downOutside = false;
+    }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("mouseup", onUp);
+    };
   }, [open]);
 
   return (
     <div className="bc-chip-wrap" ref={ref}>
-      <button
+      <div
         className={`bc-chip ${open ? "bc-chip--open" : ""} ${disabled ? "bc-chip--disabled" : ""}`}
         onClick={disabled ? undefined : onToggle}
-        disabled={disabled}
+        style={{ cursor: disabled ? "default" : "pointer" }}
       >
         <span className="bc-chip-label">{label}</span>
-        <span className="bc-chip-value">{value}</span>
+        <span className={`bc-chip-value${valueClass ? ` ${valueClass}` : ""}`}>{value}</span>
         {badge && <span className={`bc-chip-badge ${badgeClass ?? ""}`}>{badge}</span>}
+        {action && (
+          <span
+            className="bc-chip-action"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {action}
+          </span>
+        )}
         <span className="bc-chip-arrow"><ChevronDown size={12} /></span>
-      </button>
+      </div>
       {open && (
         <div className="bc-dropdown">
           {children}

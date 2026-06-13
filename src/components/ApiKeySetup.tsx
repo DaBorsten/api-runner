@@ -4,6 +4,7 @@ import { FolderOpen } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AppAction, AppState, SourceSnapshot } from "../types";
 import { usePostmanApi } from "../hooks/usePostmanApi";
+import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 
 interface Props {
   state: AppState;
@@ -22,6 +23,13 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
   const { saveApiKey, saveLocalCollection, fetchWorkspaces, fetchCollections, fetchEnvironments, saveSourceSnapshot } = usePostmanApi();
 
   async function importCollectionFile(filePath: string) {
+    const trusted = await confirmLocalCollectionTrust({
+      title: t("localTrustTitle"),
+      message: t("localTrustMessage"),
+      okLabel: t("localTrustOk"),
+      cancelLabel: t("localTrustCancel"),
+    });
+    if (!trusted) return;
     const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
     const name = fileName.replace(/\.json$/i, "");
     const id = `local_${Date.now()}`;

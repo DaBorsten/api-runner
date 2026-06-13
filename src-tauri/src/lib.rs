@@ -433,6 +433,24 @@ async fn save_api_key(app: AppHandle, id: String, label: String, key: String) ->
 }
 
 #[tauri::command]
+async fn rename_api_key(app: AppHandle, id: String, label: String) -> Result<(), String> {
+    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
+    let mut metas: Vec<ApiKeyMeta> = store
+        .get(KEY_API_KEYS)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    if let Some(existing) = metas.iter_mut().find(|e| e.id == id) {
+        existing.label = label;
+    }
+    store.set(
+        KEY_API_KEYS,
+        serde_json::to_value(&metas).map_err(|e| e.to_string())?,
+    );
+    store.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn delete_api_key(app: AppHandle, id: String) -> Result<(), String> {
     delete_keyring_password(&id);
 
@@ -1302,8 +1320,26 @@ async fn run_newman(
     Ok(())
 }
 
+/// Aggregate run statistics, read straight from newman's JSON report (`run.stats`
+/// and `run.timings`) rather than scraped from the human-readable CLI table.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RunStats {
+    pub iterations: u64,
+    pub requests_total: u64,
+    pub requests_failed: u64,
+    pub assertions_total: u64,
+    pub assertions_failed: u64,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NewmanRunResult {
+    pub results: Vec<RequestResult>,
+    pub stats: RunStats,
+}
+
 #[tauri::command]
-async fn read_newman_json(state: State<'_, AppState>) -> Result<Vec<RequestResult>, String> {
+async fn read_newman_json(state: State<'_, AppState>) -> Result<NewmanRunResult, String> {
     let path = state
         .last_json_report
         .lock()
@@ -1389,7 +1425,34 @@ async fn read_newman_json(state: State<'_, AppState>) -> Result<Vec<RequestResul
         }
     }
 
-    Ok(results)
+    // Authoritative counts come from `run.stats`; the CLI table is for humans.
+    let stat = |group: &str, field: &str| -> u64 {
+        v.get("run")
+            .and_then(|r| r.get("stats"))
+            .and_then(|s| s.get(group))
+            .and_then(|g| g.get(field))
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0)
+    };
+    let timing = |field: &str| -> f64 {
+        v.get("run")
+            .and_then(|r| r.get("timings"))
+            .and_then(|t| t.get(field))
+            .and_then(|n| n.as_f64())
+            .unwrap_or(0.0)
+    };
+    let duration_ms = (timing("completed") - timing("started")).max(0.0).round() as u64;
+
+    let stats = RunStats {
+        iterations: stat("iterations", "total"),
+        requests_total: stat("requests", "total"),
+        requests_failed: stat("requests", "failed"),
+        assertions_total: stat("assertions", "total"),
+        assertions_failed: stat("assertions", "failed"),
+        duration_ms,
+    };
+
+    Ok(NewmanRunResult { results, stats })
 }
 
 #[tauri::command]
@@ -1445,6 +1508,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_api_keys,
             save_api_key,
+            rename_api_key,
             delete_api_key,
             get_local_collections,
             save_local_collection,

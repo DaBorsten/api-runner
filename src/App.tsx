@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Play, Settings, Trash2, X } from "lucide-react";
 import "./App.css";
 import { ApiKeySetup } from "./components/ApiKeySetup";
 import { RunConfigDrawer } from "./components/RunConfigDrawer";
@@ -10,7 +11,7 @@ import { SettingsPopup } from "./components/SettingsPopup";
 import { useNewmanRun } from "./hooks/useNewmanRun";
 import { usePostmanApi } from "./hooks/usePostmanApi";
 import { useTheme } from "./hooks/useTheme";
-import { AppAction, AppState, RequestResult } from "./types";
+import { AppAction, AppState, NewmanRunResult, RequestResult } from "./types";
 
 const initialState: AppState = {
   apiKeys: [],
@@ -52,6 +53,11 @@ export interface RunHistoryEntry {
   total: number;
   duration: number;
   failed: number;
+  // Denominator for the PASSED stat (assertions if any ran, else requests).
+  // Optional so entries persisted before this field still load.
+  checksTotal?: number;
+  // Total assertions executed, for the ASSERTIONS stat card.
+  assertionsTotal?: number;
   outputLines: string[];
   requestResults: RequestResult[];
   runConfig: AppState["runConfig"];
@@ -68,6 +74,12 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, apiKeys: action.payload };
     case "ADD_API_KEY":
       return { ...state, apiKeys: [...state.apiKeys, action.payload] };
+    case "RENAME_API_KEY": {
+      const updatedKeys = state.apiKeys.map((k) =>
+        k.id === action.payload.id ? { ...k, label: action.payload.label } : k
+      );
+      return { ...state, apiKeys: updatedKeys };
+    }
     case "REMOVE_API_KEY": {
       const remaining = state.apiKeys.filter((k) => k.id !== action.payload);
       const activeStillExists = remaining.some((k) => k.id === state.activeApiKeyId);
@@ -105,6 +117,15 @@ function reducer(state: AppState, action: AppAction): AppState {
         selectedLocalCollection:
           state.selectedLocalCollection?.id === action.payload ? null : state.selectedLocalCollection,
       };
+    case "RENAME_LOCAL_COLLECTION": {
+      const updated = state.localCollections.map((c) =>
+        c.id === action.payload.id ? { ...c, name: action.payload.name } : c
+      );
+      const sel = state.selectedLocalCollection?.id === action.payload.id
+        ? { ...state.selectedLocalCollection, name: action.payload.name }
+        : state.selectedLocalCollection;
+      return { ...state, localCollections: updated, selectedLocalCollection: sel };
+    }
     case "SELECT_LOCAL_COLLECTION":
       return {
         ...state,
@@ -152,6 +173,12 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, runStatus: "running", outputLines: [], summary: null, requestResults: [] };
     case "RUN_OUTPUT":
       return { ...state, outputLines: [...state.outputLines, action.payload] };
+    case "RUN_OUTPUT_BATCH":
+      // Sidecar output is buffered and flushed once per animation frame, so a
+      // burst of lines costs one array copy / re-render instead of O(n²).
+      return action.payload.length === 0
+        ? state
+        : { ...state, outputLines: [...state.outputLines, ...action.payload] };
     case "RUN_DONE":
       return {
         ...state,
@@ -203,19 +230,6 @@ function parseDuration(lines: string[]): number {
   return 0;
 }
 
-function parsePassed(lines: string[]): { passed: number; total: number; failed: number } {
-  let passed = 0, total = 0, failed = 0;
-  for (const line of lines) {
-    const strip = line.replace(/[│├└┤┐┘┌┼─\s]/g, " ").trim();
-    const m = strip.match(/iterations\s+(\d+)/);
-    if (m) total = parseInt(m[1]);
-    const f = strip.match(/failed\s+(\d+)/);
-    if (f) failed = parseInt(f[1]);
-  }
-  passed = total - failed;
-  return { passed, total, failed };
-}
-
 export default function App() {
   const { t } = useTranslation();
 
@@ -262,13 +276,33 @@ export default function App() {
   sidebarWidthRef.current = historySidebarWidth;
 
   useEffect(() => {
-    localStorage.setItem("api-runner-history", JSON.stringify(history));
+    const KEY = "api-runner-history";
+    try {
+      localStorage.setItem(KEY, JSON.stringify(history));
+    } catch {
+      // Quota exceeded (response bodies make entries large). Persist a slimmed
+      // copy without bodies first; if it still doesn't fit, drop oldest entries.
+      const slim = history.map((e) => ({
+        ...e,
+        requestResults: e.requestResults.map((r) => ({ ...r, response_body: "" })),
+      }));
+      for (let keep = slim.length; keep >= 0; keep--) {
+        try {
+          localStorage.setItem(KEY, JSON.stringify(slim.slice(0, keep)));
+          break;
+        } catch {
+          if (keep === 0) {
+            try { localStorage.removeItem(KEY); } catch { /* give up */ }
+          }
+        }
+      }
+    }
   }, [history]);
 
   useEffect(() => {
     function onMove(e: MouseEvent) {
       if (!sidebarResizing.current) return;
-      const w = Math.max(160, Math.min(400, sidebarResizeStartW.current + e.clientX - sidebarResizeStartX.current));
+      const w = Math.max(220, Math.min(400, sidebarResizeStartW.current + e.clientX - sidebarResizeStartX.current));
       setHistorySidebarWidth(w);
       sidebarWidthRef.current = w;
     }
@@ -364,12 +398,20 @@ export default function App() {
   useEffect(() => {
     if (state.runStatus === "done" || state.runStatus === "error") {
       if (!runLaunchedRef.current) return;
-      invoke<RequestResult[]>("read_newman_json")
-        .then((results) => {
+      invoke<NewmanRunResult>("read_newman_json")
+        .then(({ results, stats }) => {
           dispatch({ type: "SET_REQUEST_RESULTS", payload: results });
           const collName = state.selectedLocalCollection?.name ?? state.selectedCollection?.name ?? "Run";
-          const { passed, total, failed } = parsePassed(state.outputLines);
-          const duration = parseDuration(state.outputLines);
+          // Counts come straight from newman's JSON report. Pass/fail is measured
+          // at the assertion level when the collection has test scripts, else at
+          // the request level (network/HTTP errors) so it's never silently zero.
+          const hasAssertions = stats.assertions_total > 0;
+          const checksTotal = hasAssertions ? stats.assertions_total : stats.requests_total;
+          const checksFailed = hasAssertions ? stats.assertions_failed : stats.requests_failed;
+          const failed = stats.assertions_failed + stats.requests_failed;
+          const passed = Math.max(0, checksTotal - checksFailed);
+          const total = stats.iterations;
+          const duration = stats.duration_ms > 0 ? stats.duration_ms : parseDuration(state.outputLines);
           const entry: RunHistoryEntry = {
             id: Date.now(),
             collectionName: collName,
@@ -378,6 +420,8 @@ export default function App() {
             total,
             failed,
             duration,
+            checksTotal,
+            assertionsTotal: stats.assertions_total,
             outputLines: [...state.outputLines],
             requestResults: results,
             runConfig: { ...state.runConfig },
@@ -451,13 +495,10 @@ export default function App() {
     return (
       <div className="app">
         <header className="app-header">
-          <span className="app-logo">▶ API Runner</span>
+          <span className="app-logo"><Play size={14} /> API Runner</span>
           <div className="app-header-right">
             <button className="settings-open-btn" onClick={() => setSettingsOpen(true)} title={t("settings")}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-              </svg>
+              <Settings size={16} />
             </button>
           </div>
         </header>
@@ -477,14 +518,11 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <span className="app-logo">▶ API Runner</span>
+        <span className="app-logo"><Play size={14} /> API Runner</span>
         <div className="app-header-right">
           <button className="settings-open-btn" onClick={() => setSettingsOpen(true)} title={t("settings")}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-              </svg>
-            </button>
+            <Settings size={16} />
+          </button>
         </div>
       </header>
 
@@ -492,19 +530,20 @@ export default function App() {
         {/* History sidebar */}
         <aside className="history-sidebar" style={{ width: historySidebarWidth, minWidth: historySidebarWidth }}>
           <div className="history-header">
-            <span className="history-title">{t("history")}</span>
-            <div className="history-header-right">
-              {history.length > 0 && (
-                <button
-                  className="history-clear-btn"
-                  onClick={() => setConfirmAction({ type: "clear" })}
-                  title={t("deleteAll_title")}
-                >
-                  {t("deleteAll")}
-                </button>
-              )}
-              <span className="history-meta">{t("runs", { count: history.length })}</span>
+            <div className="history-header-left">
+              <span className="history-title">{t("history")}</span>
+              <span className="history-count-chip">{history.length}</span>
             </div>
+            {history.length > 0 && (
+              <button
+                className="history-clear-btn"
+                onClick={() => setConfirmAction({ type: "clear" })}
+                title={t("clearHistory")}
+              >
+                <Trash2 size={12} />
+                {t("clearHistory")}
+              </button>
+            )}
           </div>
           <div className="history-list">
             {history.map((run) => (
@@ -521,7 +560,7 @@ export default function App() {
                     className="history-delete-btn"
                     onClick={(e) => { e.stopPropagation(); setConfirmAction({ type: "delete", id: run.id }); }}
                     title={t("deleteEntry")}
-                  >✕</button>
+                  ><X size={12} /></button>
                 </div>
                 <div className="history-item-meta">{run.total} iter · {(run.duration / 1000).toFixed(1)}s{run.failed > 0 ? ` · ${run.failed} fail` : ""}</div>
               </div>
@@ -568,7 +607,7 @@ export default function App() {
           )}
           {state.step !== 3 && !selectedRun && (
             <div className="main-empty">
-              <div className="main-empty-icon">▶</div>
+              <div className="main-empty-icon"><Play size={40} /></div>
               <div className="main-empty-text">{t("noRunSelected")}</div>
               <button className="btn btn--primary" onClick={handleNewRun}>{t("newRun")}</button>
             </div>

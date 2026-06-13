@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import { AppAction, AppState } from "../types";
 import { usePostmanApi } from "../hooks/usePostmanApi";
 
@@ -62,7 +63,10 @@ export function CollectionSelector({ state, dispatch, onNext, onBack }: Props) {
       )}
 
       <div className="nav-row">
-        <button className="btn btn--ghost" onClick={onBack}>Back</button>
+        <button className="btn btn--ghost" onClick={onBack} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <ArrowLeft size={14} />
+          Back
+        </button>
         <button className="btn" onClick={() => load(true)} disabled={loading}>Refresh</button>
         <button
           className="btn btn--primary"
