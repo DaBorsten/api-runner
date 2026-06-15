@@ -364,7 +364,7 @@
 │  ├─ email: justin@ridgewell.name
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\@jridgewell\trace-mapping
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\@jridgewell\trace-mapping\LICENSE
-├─ @oxc-project/types@0.132.0
+├─ @oxc-project/types@0.133.0
 │  ├─ licenses: MIT
 │  ├─ repository: https://github.com/oxc-project/oxc
 │  ├─ publisher: Boshen and oxc contributors
@@ -401,7 +401,7 @@
 │  ├─ publisher: Postman Inc.
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\@postman\yankee
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\@postman\yankee\License.md
-├─ @rolldown/binding-win32-x64-msvc@1.0.2
+├─ @rolldown/binding-win32-x64-msvc@1.0.3
 │  ├─ licenses: MIT
 │  ├─ repository: https://github.com/rolldown/rolldown
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\@rolldown\binding-win32-x64-msvc
@@ -573,7 +573,7 @@
 │  ├─ repository: https://github.com/DefinitelyTyped/DefinitelyTyped
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\@types\react-dom
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\@types\react-dom\LICENSE
-├─ @types/react@19.2.15
+├─ @types/react@19.2.17
 │  ├─ licenses: MIT
 │  ├─ repository: https://github.com/DefinitelyTyped/DefinitelyTyped
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\@types\react
@@ -722,7 +722,7 @@
 │  ├─ url: https://github.com/es128
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\anymatch
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\anymatch\LICENSE
-├─ api-runner@0.1.0
+├─ api-runner@0.1.2
 │  ├─ licenses: [1m[31mUNLICENSED[39m[22m
 │  ├─ private: true
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner
@@ -3784,7 +3784,7 @@
 │  ├─ email: i@izs.me
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\lru-cache
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\lru-cache\LICENSE
-├─ lucide-react@1.17.0
+├─ lucide-react@1.18.0
 │  ├─ licenses: ISC
 │  ├─ repository: https://github.com/lucide-icons/lucide
 │  ├─ publisher: Eric Fennis
@@ -4613,7 +4613,7 @@
 │  ├─ url: http://jongleberry.com
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\raw-body
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\raw-body\LICENSE
-├─ react-dom@19.2.6
+├─ react-dom@19.2.7
 │  ├─ licenses: MIT
 │  ├─ repository: https://github.com/facebook/react
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\react-dom
@@ -4631,7 +4631,7 @@
 │  ├─ repository: https://github.com/facebook/react
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\react-refresh
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\react-refresh\LICENSE
-├─ react@19.2.6
+├─ react@19.2.7
 │  ├─ licenses: MIT
 │  ├─ repository: https://github.com/facebook/react
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\react
@@ -4798,7 +4798,7 @@
 │  ├─ repository: https://github.com/crypto-browserify/ripemd160
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\ripemd160
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\ripemd160\LICENSE
-├─ rolldown@1.0.2
+├─ rolldown@1.0.3
 │  ├─ licenses: MIT
 │  ├─ repository: https://github.com/rolldown/rolldown
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\rolldown
@@ -5447,7 +5447,7 @@
 │  ├─ repository: https://github.com/studio-b12/tiny-error
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\tiny-error
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\tiny-error\License.md
-├─ tinyglobby@0.2.16
+├─ tinyglobby@0.2.17
 │  ├─ licenses: MIT
 │  ├─ repository: https://github.com/SuperchupuDev/tinyglobby
 │  ├─ publisher: Superchupu
@@ -5801,7 +5801,7 @@
 │  ├─ repository: https://github.com/davepacheco/node-verror
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\verror
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\verror\LICENSE
-├─ vite@8.0.14
+├─ vite@8.0.16
 │  ├─ licenses: MIT
 │  ├─ repository: https://github.com/vitejs/vite
 │  ├─ publisher: Evan You

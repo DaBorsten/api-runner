@@ -3422,11 +3422,7 @@ body.is-resizing * { cursor: col-resize !important; }
   background: var(--surface2, rgba(100,116,139,0.12));
   color: var(--text, #0f172a);
 }
-.settings-open-btn svg {
-  transition: transform 0.25s var(--ease-out-strong);
-}
-.settings-open-btn:hover svg { transform: rotate(30deg); }
-.settings-open-btn:active svg { transform: rotate(30deg) scale(0.88); }
+.settings-open-btn:active svg { transform: scale(0.88); }
 
 /* ── Overlay ────────────────────────────────────────────────────────────────── */
 .sp-overlay {
