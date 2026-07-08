@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
-import { AppAction, AppState } from "../types";
+import type { AppAction, AppState } from "../types";
 import { usePostmanApi } from "../hooks/usePostmanApi";
 
 interface Props {
@@ -14,12 +14,7 @@ export function WorkspaceSelector({ state, dispatch, onNext, onBack }: Props) {
   const [loading, setLoading] = useState(false);
   const { fetchWorkspaces } = usePostmanApi();
 
-  useEffect(() => {
-    const activeKey = state.apiKeys.find((k) => k.id === state.activeApiKeyId);
-    if (activeKey && state.workspaces.length === 0) load(false);
-  }, []);
-
-  async function load(force: boolean) {
+  const load = useCallback(async (force: boolean) => {
     const activeKey = state.apiKeys.find((k) => k.id === state.activeApiKeyId);
     if (!activeKey) return;
     setLoading(true);
@@ -32,7 +27,15 @@ export function WorkspaceSelector({ state, dispatch, onNext, onBack }: Props) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [state.apiKeys, state.activeApiKeyId, fetchWorkspaces, dispatch]);
+
+  useEffect(() => {
+    async function run() {
+      const activeKey = state.apiKeys.find((k) => k.id === state.activeApiKeyId);
+      if (activeKey && state.workspaces.length === 0) await load(false);
+    }
+    void run();
+  }, [state.apiKeys, state.activeApiKeyId, state.workspaces.length, load]);
 
   function handleSelect(id: string) {
     dispatch({ type: "SELECT_WORKSPACE", payload: id });
@@ -70,7 +73,7 @@ export function WorkspaceSelector({ state, dispatch, onNext, onBack }: Props) {
           <ArrowLeft size={14} />
           Back
         </button>
-        <button className="btn" onClick={() => load(true)} disabled={loading}>Refresh</button>
+        <button className="btn" onClick={() => void load(true)} disabled={loading}>Refresh</button>
         <button
           className="btn btn--primary"
           onClick={onNext}

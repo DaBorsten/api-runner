@@ -3,8 +3,8 @@ import { useTranslation } from "react-i18next";
 import { Folder, FolderOpen, X, Check, ChevronDown, ChevronRight, Minus, Plus, Play, Key, FileText, RefreshCw, AlertCircle, Upload, Globe, ArrowLeft } from "lucide-react";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ApiKeyEntry, AppAction, AppState, CollectionItem, CollectionRequest, isFolder, SourceSnapshot, WorkspaceSnapshot } from "../types";
-import { usePostmanApi } from "../hooks/usePostmanApi";
+import { type ApiKeyEntry, type AppAction, type AppState, type CollectionFolder, type CollectionItem, type CollectionRequest, isFolder, type LocalCollection, type SourceSnapshot, type WorkspaceSnapshot } from "../types";
+import { type usePostmanApi } from "../hooks/usePostmanApi";
 import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 import { DataFilePreview } from "./DataFilePreview";
 import { RequestBodyViewer } from "./RequestBodyViewer";
@@ -17,7 +17,7 @@ interface Props {
   canRun: boolean;
   api: ReturnType<typeof usePostmanApi>;
   fullPage?: boolean;
-  snapshots?: Record<string, SourceSnapshot>;
+  snapshots?: Partial<Record<string, SourceSnapshot>>;
   syncStatus?: "idle" | "syncing" | "error";
 }
 
@@ -48,7 +48,7 @@ function getAllRequestIds(items: CollectionItem[]): string[] {
   return ids;
 }
 
-function getFolderRequestIds(folder: import("../types").CollectionFolder): string[] {
+function getFolderRequestIds(folder: CollectionFolder): string[] {
   return getAllRequestIds(folder.item);
 }
 
@@ -66,16 +66,20 @@ function getFlatVisibleRequestIds(items: CollectionItem[], expandedIds: Set<stri
 
 export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage, snapshots, syncStatus }: Props) {
   const { t } = useTranslation();
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  });
 
   // One-time warning before importing a local collection (its scripts run on the
   // user's machine). Shared by the file-picker and drag-and-drop import paths.
-  const ensureLocalTrust = () =>
+  const ensureLocalTrust = useCallback(() =>
     confirmLocalCollectionTrust({
       title: t("localTrustTitle"),
       message: t("localTrustMessage"),
       okLabel: t("localTrustOk"),
       cancelLabel: t("localTrustCancel"),
-    });
+    }), [t]);
 
   const [folderItems, setFolderItems] = useState<CollectionItem[]>([]);
   const [foldersLoading, setFoldersLoading] = useState(false);
@@ -83,6 +87,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   const [dataPreviewCollapsed, setDataPreviewCollapsed] = useState(false);
   const [dataRowTotal, setDataRowTotal] = useState(0);
   const dataRowUserChangedRef = useRef(false);
+  const dataRowUserChangedFileRef = useRef<string | null>(null);
 
   const folderReqId = useRef(0);
   const masterCheckboxRef = useRef<HTMLInputElement>(null);
@@ -103,7 +108,11 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   const allExpanded = allFolderIds.length > 0 && allFolderIds.every((id) => expandedIds.has(id));
 
   function toggleExpandedId(id: string, open: boolean) {
-    setExpandedIds((prev) => { const next = new Set(prev); open ? next.add(id) : next.delete(id); return next; });
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(id); else next.delete(id);
+      return next;
+    });
   }
 
   function handleToggleAll() {
@@ -113,10 +122,10 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
 
   // Tick every request in the freshly loaded collection so a newly selected
   // collection runs everything by default.
-  function selectAllRequests(items: CollectionItem[]) {
+  const selectAllRequests = useCallback((items: CollectionItem[]) => {
     const ids = getAllRequestIds(items);
     dispatch({ type: "SET_RUN_CONFIG", payload: { selectedRequestIds: ids.length > 0 ? ids : null } });
-  }
+  }, [dispatch]);
 
   const allRequestIds = getAllRequestIds(folderItems);
   const allRequestsSelected =
@@ -160,7 +169,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     lastClickedIdRef.current = requestId;
   }
 
-  function handleToggleFolder(folder: import("../types").CollectionFolder) {
+  function handleToggleFolder(folder: CollectionFolder) {
     const folderReqIds = getFolderRequestIds(folder);
     const allChecked = folderReqIds.every((id) => selectedRequestIds.has(id));
     const next = new Set(selectedRequestIds);
@@ -191,12 +200,13 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
 
   const visibleItems = filterItems(folderItems, searchQuery);
 
-  useEffect(() => {
+  const [prevSearchQuery, setPrevSearchQuery] = useState(searchQuery);
+  if (prevSearchQuery !== searchQuery) {
+    setPrevSearchQuery(searchQuery);
     if (searchQuery) {
-      const ids = getAllFolderIds(visibleItems);
-      setExpandedIds(new Set(ids));
+      setExpandedIds(new Set(getAllFolderIds(visibleItems)));
     }
-  }, [searchQuery]);
+  }
   const [showAddPopup, setShowAddPopup] = useState(false);
   const [popupTab, setPopupTab] = useState<"apikey" | "file">("apikey");
   const [inputLabel, setInputLabel] = useState("");
@@ -222,7 +232,9 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   const rightResizeStartX = useRef(0);
   const rightResizeStartW = useRef(0);
   const rightWidthRef = useRef(rightPanelWidth);
-  rightWidthRef.current = rightPanelWidth;
+  useEffect(() => {
+    rightWidthRef.current = rightPanelWidth;
+  }, [rightPanelWidth]);
 
   useEffect(() => {
     if (!showAddPopup || popupTab !== "file") return;
@@ -231,12 +243,11 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       if (event.payload.type === "enter") {
         const isJson = event.payload.paths[0]?.toLowerCase().endsWith(".json") ?? false;
         setDragging(isJson ? "valid" : "invalid");
-      } else if (event.payload.type === "over") {
       } else if (event.payload.type === "leave") {
         setDragging("idle");
       } else if (event.payload.type === "drop") {
         setDragging("idle");
-        const path = event.payload.paths?.[0];
+        const path: string | undefined = event.payload.paths[0];
         if (!path) return;
         if (!path.toLowerCase().endsWith(".json")) return;
         const fileName = path.split(/[\\/]/).pop() ?? path;
@@ -247,9 +258,9 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
           setInputLocalName(defaultName);
         }).catch((err) => console.error("[drop] trust check failed:", err));
       }
-    }).then((fn) => { unlisten = fn; });
+    }).then((fn) => { unlisten = fn; }).catch((err) => console.error("[drop] listener setup failed:", err));
     return () => { unlisten?.(); };
-  }, [showAddPopup, popupTab]);
+  }, [showAddPopup, popupTab, ensureLocalTrust]);
 
   useEffect(() => {
     if (showAddPopup) return;
@@ -262,21 +273,24 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
         setDataFileDragging("idle");
       } else if (event.payload.type === "drop") {
         setDataFileDragging("idle");
-        const filePath = event.payload.paths?.[0];
+        const filePath: string | undefined = event.payload.paths[0];
         if (!filePath) return;
         const lower = filePath.toLowerCase();
         if (!lower.endsWith(".json") && !lower.endsWith(".csv")) return;
         dataRowUserChangedRef.current = true;
+        dataRowUserChangedFileRef.current = filePath;
         dispatch({ type: "SET_RUN_CONFIG", payload: { dataFile: filePath, dataRowIndices: null } });
         setDataPreviewCollapsed(false);
       }
-    }).then((fn) => { unlisten = fn; });
+    }).then((fn) => { unlisten = fn; }).catch((err) => console.error("[drop] listener setup failed:", err));
     return () => { unlisten?.(); };
-  }, [showAddPopup]);
+  }, [showAddPopup, dispatch]);
 
-  useEffect(() => {
+  const [prevEnvFile, setPrevEnvFile] = useState(state.runConfig.envFile);
+  if (prevEnvFile !== state.runConfig.envFile) {
+    setPrevEnvFile(state.runConfig.envFile);
     if (state.runConfig.envFile) setEnvMode("local");
-  }, [state.runConfig.envFile]);
+  }
 
   useEffect(() => {
     if (openDropdown !== "environment") return;
@@ -320,15 +334,73 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   const activeKey = state.apiKeys.find((k) => k.id === state.activeApiKeyId);
   const selectedWorkspace = state.workspaces.find((w) => w.id === state.selectedWorkspace);
   const selectedName = state.selectedLocalCollection?.name ?? state.selectedCollection?.name ?? "";
-  const canRun = !!(state.selectedCollection || state.selectedLocalCollection);
+  const canRun = !!(state.selectedCollection ?? state.selectedLocalCollection);
   // The run additionally requires at least one request ticked in the tree.
   const runEnabled = canRun && selectedRequestIds.size > 0;
 
-  useEffect(() => {
-    if (state.selectedCollection && activeKey) loadFolders();
-    else if (state.selectedLocalCollection) loadLocalFolders();
+  const collectionKey = `${state.selectedCollection?.uid ?? ""}|${state.selectedLocalCollection?.id ?? ""}`;
+  const [prevCollectionKey, setPrevCollectionKey] = useState(collectionKey);
+  if (prevCollectionKey !== collectionKey) {
+    setPrevCollectionKey(collectionKey);
+    if (state.selectedCollection || state.selectedLocalCollection) setFoldersLoading(true);
     else setFolderItems([]);
-  }, [state.selectedCollection?.uid, state.selectedLocalCollection?.id]);
+  }
+
+  const loadFolders = useCallback(async () => {
+    const s = stateRef.current;
+    const currentActiveKey = s.apiKeys.find((k) => k.id === s.activeApiKeyId);
+    if (!s.selectedCollection || !currentActiveKey) return;
+    const myId = ++folderReqId.current;
+    const targetUid = s.selectedCollection.uid;
+    try {
+      const items = await api.fetchCollectionDetail(currentActiveKey.id, targetUid);
+      if (myId !== folderReqId.current) return;
+      setFolderItems(items);
+      setExpandedIds(new Set());
+      lastClickedIdRef.current = null;
+      const loadedIds = getAllRequestIds(items);
+      const existing = stateRef.current.runConfig.selectedRequestIds;
+      const hasOverlap = existing !== null && loadedIds.some((id) => existing.includes(id));
+      if (!hasOverlap) selectAllRequests(items);
+    } catch {
+      if (myId !== folderReqId.current) return;
+      setFolderItems([]);
+    } finally {
+      if (myId === folderReqId.current) setFoldersLoading(false);
+    }
+  }, [api, selectAllRequests]);
+
+  const loadLocalFolders = useCallback(async () => {
+    const s = stateRef.current;
+    if (!s.selectedLocalCollection) return;
+    const myId = ++folderReqId.current;
+    const targetPath = s.selectedLocalCollection.path;
+    try {
+      const items = await api.readLocalCollection(targetPath);
+      if (myId !== folderReqId.current) return;
+      setFolderItems(items);
+      setExpandedIds(new Set());
+      lastClickedIdRef.current = null;
+      const loadedIds = getAllRequestIds(items);
+      const existing = stateRef.current.runConfig.selectedRequestIds;
+      const hasOverlap = existing !== null && loadedIds.some((id) => existing.includes(id));
+      if (!hasOverlap) selectAllRequests(items);
+    } catch {
+      if (myId !== folderReqId.current) return;
+      setFolderItems([]);
+    } finally {
+      if (myId === folderReqId.current) setFoldersLoading(false);
+    }
+  }, [api, selectAllRequests]);
+
+  useEffect(() => {
+    async function run() {
+      const s = stateRef.current;
+      if (s.selectedCollection && activeKey) await loadFolders();
+      else if (s.selectedLocalCollection) await loadLocalFolders();
+    }
+    void run();
+  }, [state.selectedCollection?.uid, state.selectedLocalCollection?.id, activeKey, loadFolders, loadLocalFolders]);
 
   // Core sync logic – accepts an explicit key so it can be called before state has updated
   async function performSync(keyToSync: ApiKeyEntry) {
@@ -375,55 +447,9 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     await performSync(activeKey);
   }
 
-  async function loadFolders() {
-    if (!state.selectedCollection || !activeKey) return;
-    const myId = ++folderReqId.current;
-    const targetUid = state.selectedCollection.uid;
-    setFoldersLoading(true);
-    try {
-      const items = await api.fetchCollectionDetail(activeKey.id, targetUid);
-      if (myId !== folderReqId.current) return;
-      setFolderItems(items);
-      setExpandedIds(new Set());
-      lastClickedIdRef.current = null;
-      const loadedIds = getAllRequestIds(items);
-      const existing = state.runConfig.selectedRequestIds;
-      const hasOverlap = existing !== null && loadedIds.some((id) => existing.includes(id));
-      if (!hasOverlap) selectAllRequests(items);
-    } catch {
-      if (myId !== folderReqId.current) return;
-      setFolderItems([]);
-    } finally {
-      if (myId === folderReqId.current) setFoldersLoading(false);
-    }
-  }
-
-  async function loadLocalFolders() {
-    if (!state.selectedLocalCollection) return;
-    const myId = ++folderReqId.current;
-    const targetPath = state.selectedLocalCollection.path;
-    setFoldersLoading(true);
-    try {
-      const items = await api.readLocalCollection(targetPath);
-      if (myId !== folderReqId.current) return;
-      setFolderItems(items);
-      setExpandedIds(new Set());
-      lastClickedIdRef.current = null;
-      const loadedIds = getAllRequestIds(items);
-      const existing = state.runConfig.selectedRequestIds;
-      const hasOverlap = existing !== null && loadedIds.some((id) => existing.includes(id));
-      if (!hasOverlap) selectAllRequests(items);
-    } catch {
-      if (myId !== folderReqId.current) return;
-      setFolderItems([]);
-    } finally {
-      if (myId === folderReqId.current) setFoldersLoading(false);
-    }
-  }
-
-  function setConfig(patch: Partial<typeof cfg>) {
+  const setConfig = useCallback((patch: Partial<typeof cfg>) => {
     dispatch({ type: "SET_RUN_CONFIG", payload: patch });
-  }
+  }, [dispatch]);
 
   const holdDecrement = useHoldRepeat(() => setConfig({ iterations: Math.max(1, cfg.iterations - 1) }));
   const holdIncrement = useHoldRepeat(() => setConfig({ iterations: cfg.iterations + 1 }));
@@ -488,13 +514,20 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   useEffect(() => {
     if (!cfg.dataFile) return;
     if (!dataRowUserChangedRef.current) return;
+    // The pending flag may have been left over from an edit to a different file
+    // (e.g. a rerun restored a different dataFile before the total arrived) — a
+    // stale flag must not overwrite the newly restored iterations count.
+    if (dataRowUserChangedFileRef.current !== cfg.dataFile) {
+      dataRowUserChangedRef.current = false;
+      return;
+    }
     const selectedCount = cfg.dataRowIndices === null ? dataRowTotal : cfg.dataRowIndices.length;
     // dataRowTotal may still be 0 when the file just changed but hasn't loaded yet.
     // Keep the flag set so we retry once the total arrives.
     if (selectedCount === 0) return;
     dataRowUserChangedRef.current = false;
     setConfig({ iterations: selectedCount });
-  }, [cfg.dataRowIndices, dataRowTotal]);
+  }, [cfg.dataRowIndices, dataRowTotal, cfg.dataFile, setConfig]);
 
   useEffect(() => {
     if (!showAddPopup) return;
@@ -528,6 +561,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     // and re-open the preview so the freshly picked rows are visible.
     if (typeof path === "string") {
       dataRowUserChangedRef.current = true;
+      dataRowUserChangedFileRef.current = path;
       setConfig({ dataFile: path, dataRowIndices: null });
       setDataPreviewCollapsed(false);
     }
@@ -595,10 +629,10 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                 syncStatus === "error" && state.lastSyncError
                   ? t("syncErrorTitle", { error: state.lastSyncError })
                   : snapshots?.[activeKey.id]
-                    ? t("syncTitleLast", { date: new Date(snapshots[activeKey.id].synced_at * 1000).toLocaleString() })
+                    ? t("syncTitleLast", { date: new Date(snapshots[activeKey.id]!.synced_at * 1000).toLocaleString() })
                     : t("syncTitleNever")
               }
-              onClick={handleRefresh}
+              onClick={() => void handleRefresh()}
               disabled={syncStatus === "syncing"}
             >
               {syncStatus === "syncing" ? (
@@ -818,7 +852,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
           <DataFilePreview
             path={cfg.dataFile}
             selected={cfg.dataRowIndices}
-            onChange={(next) => { dataRowUserChangedRef.current = true; setConfig({ dataRowIndices: next }); }}
+            onChange={(next) => { dataRowUserChangedRef.current = true; dataRowUserChangedFileRef.current = cfg.dataFile; setConfig({ dataRowIndices: next }); }}
             onCollapse={() => setDataPreviewCollapsed(true)}
             onTotalChange={setDataRowTotal}
             onColumnsChange={setDataColumnCount}
@@ -885,11 +919,11 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                     placeholder="PMAK-..."
                     value={inputKey}
                     onChange={(e) => setInputKey(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleSaveApiKey()}
+                    onKeyDown={(e) => { if (e.key === "Enter") void handleSaveApiKey(); }}
                   />
                   <button
                     className="btn btn--primary"
-                    onClick={handleSaveApiKey}
+                    onClick={() => void handleSaveApiKey()}
                     disabled={saving || !inputKey.trim()}
                   >
                     {saving ? t("saving") : t("add")}
@@ -906,11 +940,11 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                     onDragLeave={(e) => { e.preventDefault(); dragCounter.current--; if (dragCounter.current === 0) setDragging("idle"); }}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={handleDropPopup}
-                    onClick={handleImportCollection}
+                    onClick={() => void handleImportCollection()}
                   >
                     <span className="drop-zone-icon"><FolderOpen size={32} /></span>
                     <span className="drop-zone-text">
-                      {dragging ? t("dropRelease") : t("dropOrClickShort")}
+                      {dragging !== "idle" ? t("dropRelease") : t("dropOrClickShort")}
                     </span>
                   </div>
                 ) : (
@@ -926,14 +960,14 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                       value={inputLocalName}
                       onChange={(e) => setInputLocalName(e.target.value)}
                       autoFocus
-                      onKeyDown={(e) => e.key === "Enter" && confirmImportCollection()}
+                      onKeyDown={(e) => { if (e.key === "Enter") void confirmImportCollection(); }}
                     />
                     <div className="popup-actions-row">
                       <button className="btn" onClick={() => { setPendingLocalFile(null); setInputLocalName(""); }} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         <ArrowLeft size={14} />
                         {t("back")}
                       </button>
-                      <button className="btn btn--primary" onClick={confirmImportCollection}>
+                      <button className="btn btn--primary" onClick={() => void confirmImportCollection()}>
                         {t("add")}
                       </button>
                     </div>
@@ -1000,7 +1034,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
           ) : (
             <div
               className={`data-file-dropzone${dataFileDragging === "valid" ? " data-file-dropzone--active" : dataFileDragging === "invalid" ? " data-file-dropzone--invalid" : ""}`}
-              onClick={pickDataFile}
+              onClick={() => void pickDataFile()}
               onDragEnter={(e) => e.preventDefault()}
               onDragLeave={(e) => e.preventDefault()}
               onDragOver={(e) => e.preventDefault()}
@@ -1097,7 +1131,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                 </button>
               </div>
             ) : (
-              <button className="env-local-pick-btn" onClick={pickEnvFile}>
+              <button className="env-local-pick-btn" onClick={() => void pickEnvFile()}>
                 <Folder size={18} />
                 {t("localFile")}
               </button>
@@ -1147,30 +1181,30 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose, renamingKeyId, renamingColId]);
+  }, [onClose, renamingKeyId, renamingColId, setRenamingColId]);
 
-  async function handleDeleteApiKey(k: import("../types").ApiKeyEntry) {
+  async function handleDeleteApiKey(k: ApiKeyEntry) {
     const ok = await confirm(t("removeSourceConfirm", { name: k.label }), { title: t("removeSourceTitle"), kind: "warning" });
     if (!ok) return;
     await api.deleteApiKey(k.id);
     dispatch({ type: "REMOVE_API_KEY", payload: k.id });
   }
 
-  async function handleSaveKeyRename(k: import("../types").ApiKeyEntry) {
+  async function handleSaveKeyRename(k: ApiKeyEntry) {
     const name = renameKeyValue.trim() || k.label;
     await api.renameApiKey(k.id, name);
     dispatch({ type: "RENAME_API_KEY", payload: { id: k.id, label: name } });
     setRenamingKeyId(null);
   }
 
-  async function handleDeleteLocalCol(col: import("../types").LocalCollection) {
+  async function handleDeleteLocalCol(col: LocalCollection) {
     const ok = await confirm(t("removeSourceConfirm", { name: col.name }), { title: t("removeSourceTitle"), kind: "warning" });
     if (!ok) return;
     await api.deleteLocalCollection(col.id);
     dispatch({ type: "REMOVE_LOCAL_COLLECTION", payload: col.id });
   }
 
-  async function handleSaveColRename(col: import("../types").LocalCollection) {
+  async function handleSaveColRename(col: LocalCollection) {
     const name = renameValue.trim() || col.name;
     await api.saveLocalCollection(col.id, name, col.path);
     dispatch({ type: "RENAME_LOCAL_COLLECTION", payload: { id: col.id, name } });
@@ -1195,12 +1229,12 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
                     value={renameKeyValue}
                     autoFocus
                     onChange={(e) => setRenameKeyValue(e.target.value)}
-                    onKeyDown={async (e) => {
-                      if (e.key === "Enter") await handleSaveKeyRename(k);
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleSaveKeyRename(k);
                       else if (e.key === "Escape") setRenamingKeyId(null);
                     }}
                   />
-                  <button className="bc-rename-confirm" onClick={() => handleSaveKeyRename(k)}><Check size={15} /></button>
+                  <button className="bc-rename-confirm" onClick={() => void handleSaveKeyRename(k)}><Check size={15} /></button>
                   <button className="bc-rename-cancel" onClick={() => setRenamingKeyId(null)}><X size={15} /></button>
                 </>
               ) : (
@@ -1214,7 +1248,7 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
                   <button
                     className="manage-source-btn manage-source-btn--delete"
                     title={t("removeSource")}
-                    onClick={() => handleDeleteApiKey(k)}
+                    onClick={() => void handleDeleteApiKey(k)}
                   ><X size={15} /></button>
                 </>
               )}
@@ -1230,12 +1264,12 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
                     value={renameValue}
                     autoFocus
                     onChange={(e) => setRenameValue(e.target.value)}
-                    onKeyDown={async (e) => {
-                      if (e.key === "Enter") await handleSaveColRename(col);
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleSaveColRename(col);
                       else if (e.key === "Escape") setRenamingColId(null);
                     }}
                   />
-                  <button className="bc-rename-confirm" onClick={() => handleSaveColRename(col)}><Check size={15} /></button>
+                  <button className="bc-rename-confirm" onClick={() => void handleSaveColRename(col)}><Check size={15} /></button>
                   <button className="bc-rename-cancel" onClick={() => setRenamingColId(null)}><X size={15} /></button>
                 </>
               ) : (
@@ -1249,7 +1283,7 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
                   <button
                     className="manage-source-btn manage-source-btn--delete"
                     title={t("removeSource")}
-                    onClick={() => handleDeleteLocalCol(col)}
+                    onClick={() => void handleDeleteLocalCol(col)}
                   ><X size={15} /></button>
                 </>
               )}
@@ -1270,7 +1304,9 @@ function useHoldRepeat(action: () => void, delay = 350, interval = 80) {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  actionRef.current = action;
+  useEffect(() => {
+    actionRef.current = action;
+  });
 
   function stop() {
     if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
@@ -1327,7 +1363,7 @@ function BreadcrumbChip({ label, value, valueClass, badge, badgeClass, open, onT
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [open]);
+  }, [open, onClose]);
 
   return (
     <div className="bc-chip-wrap" ref={ref}>
@@ -1377,7 +1413,7 @@ function RequestPopover({ request, pos, onMouseEnter, onMouseLeave }: { request:
     if (top + rect.height + MARGIN > vh) top = vh - rect.height - MARGIN;
     top = Math.max(MARGIN, top);
     setAdjusted({ top, left });
-  }, [pos.top, pos.left]);
+  }, [pos]);
 
   useEffect(() => {
     clamp();
@@ -1425,12 +1461,19 @@ interface TreeItemProps {
   onToggleExpand: (id: string, open: boolean) => void;
   selectedRequestIds: Set<string>;
   onToggleRequest: (id: string, shiftKey: boolean) => void;
-  onToggleFolder: (folder: import("../types").CollectionFolder) => void;
+  onToggleFolder: (folder: CollectionFolder) => void;
 }
 
 function TreeItem({ item, depth, expandedIds, onToggleExpand, selectedRequestIds, onToggleRequest, onToggleFolder }: TreeItemProps) {
   const indent = depth * 16;
   const [popover, setPopover] = useState<{ request: CollectionRequest; pos: PopoverPos } | null>(null);
+  const folderReqIdsForIndeterminate = isFolder(item) ? getFolderRequestIds(item) : [];
+  const checkedCountForIndeterminate = folderReqIdsForIndeterminate.filter((id) => selectedRequestIds.has(id)).length;
+  const indeterminate = checkedCountForIndeterminate > 0 && checkedCountForIndeterminate < folderReqIdsForIndeterminate.length;
+  const checkboxRef = React.useRef<HTMLInputElement>(null);
+  React.useEffect(() => {
+    if (checkboxRef.current) checkboxRef.current.indeterminate = indeterminate;
+  }, [indeterminate]);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1466,15 +1509,9 @@ function TreeItem({ item, depth, expandedIds, onToggleExpand, selectedRequestIds
 
   if (isFolder(item)) {
     const expanded = expandedIds.has(item.id);
-    const folderReqIds = getFolderRequestIds(item);
-    const checkedCount = folderReqIds.filter((id) => selectedRequestIds.has(id)).length;
+    const folderReqIds = folderReqIdsForIndeterminate;
+    const checkedCount = checkedCountForIndeterminate;
     const allChecked = folderReqIds.length > 0 && checkedCount === folderReqIds.length;
-    const indeterminate = checkedCount > 0 && checkedCount < folderReqIds.length;
-
-    const checkboxRef = React.useRef<HTMLInputElement>(null);
-    React.useEffect(() => {
-      if (checkboxRef.current) checkboxRef.current.indeterminate = indeterminate;
-    }, [indeterminate]);
 
     return (
       <div>

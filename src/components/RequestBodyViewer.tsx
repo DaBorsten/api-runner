@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Highlight, themes } from "prism-react-renderer";
-import { FormField, RequestBody } from "../types";
+import { type FormField, type RequestBody } from "../types";
 
 function useCodeTheme() {
   const [isDark, setIsDark] = useState(
@@ -64,7 +64,7 @@ function JsonHighlight({ code }: { code: string }) {
             <div key={i} {...getLineProps({ line })}>
               <span className="request-detail-lineno">{i + 1}</span>
               {line.map((token, k) => {
-                const { key, ...props } = getTokenProps({ token });
+                const props = getTokenProps({ token });
                 return renderTokenWithPlaceholders(token, props, k);
               })}
             </div>
@@ -136,6 +136,5 @@ function FieldTable({ fields, label }: { fields: FormField[]; label: string }) {
 export function RequestBodyViewer({ body }: Props) {
   if (body.type === "Raw") return <RawBody content={body.content} />;
   if (body.type === "FormData") return <FieldTable fields={body.content} label="FormData" />;
-  if (body.type === "UrlEncoded") return <FieldTable fields={body.content} label="UrlEncoded" />;
-  return null;
+  return <FieldTable fields={body.content} label="UrlEncoded" />;
 }

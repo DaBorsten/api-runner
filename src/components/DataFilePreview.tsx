@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Minus, Search, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { DataPreview } from "../types";
+import { type DataPreview } from "../types";
 
 interface Props {
   path: string;
@@ -65,11 +65,16 @@ export function DataFilePreview({
     window.addEventListener("pointerup", onUp);
   }
 
-  useEffect(() => {
-    let cancelled = false;
+  const [prevPath, setPrevPath] = useState(path);
+  if (prevPath !== path) {
+    setPrevPath(path);
     setLoading(true);
     setError(null);
     setPreview(null);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
     lastIndexRef.current = null;
     invoke<DataPreview>("read_data_file", { path })
       .then((p) => {
@@ -94,7 +99,7 @@ export function DataFilePreview({
   useEffect(() => {
     onTotalChange(total);
     onColumnsChange?.(preview?.headers.length ?? 0);
-  }, [total, preview?.headers.length]);
+  }, [total, preview?.headers.length, onTotalChange, onColumnsChange]);
 
   // Drive the header checkbox's indeterminate state imperatively (React has no
   // prop for it).
@@ -126,9 +131,7 @@ export function DataFilePreview({
             const lower = searchQuery.toLowerCase();
             if (
               row.some((cell) =>
-                String(cell ?? "")
-                  .toLowerCase()
-                  .includes(lower),
+                cell.toLowerCase().includes(lower),
               )
             ) {
               acc.push({ origIndex: i, cells: row });
@@ -148,7 +151,7 @@ export function DataFilePreview({
 
   function toggleRow(i: number, shiftKey: boolean) {
     const set = new Set(
-      selected === null ? preview!.rows.map((_, idx) => idx) : selected,
+      selected ?? preview!.rows.map((_, idx) => idx),
     );
 
     if (

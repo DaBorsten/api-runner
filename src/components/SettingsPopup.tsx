@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { RefreshCw, CheckCircle, XCircle, X, Download } from "lucide-react";
-import { ThemeMode } from "../hooks/useTheme";
+import type { ThemeMode } from "../hooks/useTheme";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
 
@@ -22,16 +22,16 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
   const langPillRef = useRef<HTMLSpanElement>(null);
   const langBtnRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  const THEME_OPTIONS: { value: ThemeMode; label: string }[] = useMemo(() => [
     { value: "light", label: t("theme_light") },
     { value: "dark", label: t("theme_dark") },
     { value: "system", label: t("theme_system") },
-  ];
+  ], [t]);
 
-  const LANG_OPTIONS = [
+  const LANG_OPTIONS = useMemo(() => [
     { value: "de", label: t("langGerman") },
     { value: "en", label: t("langEnglish") },
-  ];
+  ], [t]);
 
   const [version, setVersion] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
@@ -41,10 +41,10 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const [isClosing, setIsClosing] = useState(false);
 
-  function handleClose() {
+  const handleClose = useCallback(() => {
     setIsClosing(true);
     setTimeout(onClose, 180);
-  }
+  }, [onClose]);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
@@ -56,7 +56,7 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [handleClose]);
 
   // Animate theme segmented-control pill
   useEffect(() => {
@@ -67,7 +67,7 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
     const containerPad = 3;
     pill.style.width = `${btn.offsetWidth}px`;
     pill.style.transform = `translateX(${btn.offsetLeft - containerPad}px)`;
-  }, [theme, i18n.language]);
+  }, [theme, i18n.language, THEME_OPTIONS]);
 
   // Animate language segmented-control pill
   useEffect(() => {
@@ -78,7 +78,7 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
     const containerPad = 3;
     pill.style.width = `${btn.offsetWidth}px`;
     pill.style.transform = `translateX(${btn.offsetLeft - containerPad}px)`;
-  }, [i18n.language]);
+  }, [i18n.language, LANG_OPTIONS]);
 
   async function handleCheckForUpdates() {
     setUpdateStatus("checking");
@@ -183,7 +183,7 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
                   key={opt.value}
                   ref={(el) => { langBtnRefs.current[i] = el; }}
                   className={`sp-seg-btn${i18n.language === opt.value ? " sp-seg-btn--active" : ""}`}
-                  onClick={() => i18n.changeLanguage(opt.value)}
+                  onClick={() => void i18n.changeLanguage(opt.value)}
                 >
                   {opt.label}
                 </button>
@@ -210,7 +210,7 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
           {!isInstalling && updateStatus !== "available" && (
             <button
               className="sp-update-btn"
-              onClick={handleCheckForUpdates}
+              onClick={() => void handleCheckForUpdates()}
               disabled={updateStatus === "checking"}
             >
               <RefreshCw size={13} className={updateStatus === "checking" ? "sp-spin" : ""} />
@@ -218,7 +218,7 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
             </button>
           )}
           {updateStatus === "available" && !isInstalling && (
-            <button className="sp-update-btn sp-update-btn--available" onClick={handleInstall}>
+            <button className="sp-update-btn sp-update-btn--available" onClick={() => void handleInstall()}>
               <Download size={13} />
               {t("installNow")}
             </button>

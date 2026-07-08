@@ -148,7 +148,7 @@ export interface AppState {
   requestResults: RequestResult[];
   step: Step;
   error: string | null;
-  snapshots: Record<string, SourceSnapshot>;
+  snapshots: Partial<Record<string, SourceSnapshot>>;
   syncStatus: "idle" | "syncing" | "error";
   lastSyncError: string | null;
 }

@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
-import { AppAction, AppState } from "../types";
+import { type AppAction, type AppState } from "../types";
 import { usePostmanApi } from "../hooks/usePostmanApi";
 
 interface Props {
@@ -14,11 +14,7 @@ export function CollectionSelector({ state, dispatch, onNext, onBack }: Props) {
   const [loading, setLoading] = useState(false);
   const { fetchCollections } = usePostmanApi();
 
-  useEffect(() => {
-    if (state.selectedWorkspace) load(false);
-  }, [state.selectedWorkspace]);
-
-  async function load(force: boolean) {
+  const load = useCallback(async (force: boolean) => {
     if (!state.selectedWorkspace) return;
     setLoading(true);
     dispatch({ type: "CLEAR_ERROR" });
@@ -32,7 +28,14 @@ export function CollectionSelector({ state, dispatch, onNext, onBack }: Props) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [state.selectedWorkspace, state.apiKeys, state.activeApiKeyId, fetchCollections, dispatch]);
+
+  useEffect(() => {
+    async function run() {
+      if (state.selectedWorkspace) await load(false);
+    }
+    void run();
+  }, [state.selectedWorkspace, load]);
 
   return (
     <div className="step-panel">
@@ -67,7 +70,7 @@ export function CollectionSelector({ state, dispatch, onNext, onBack }: Props) {
           <ArrowLeft size={14} />
           Back
         </button>
-        <button className="btn" onClick={() => load(true)} disabled={loading}>Refresh</button>
+        <button className="btn" onClick={() => void load(true)} disabled={loading}>Refresh</button>
         <button
           className="btn btn--primary"
           onClick={onNext}

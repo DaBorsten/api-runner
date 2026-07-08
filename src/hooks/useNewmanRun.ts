@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { useEffect, useRef } from "react";
-import { AppAction, RunConfig } from "../types";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useRef } from "react";
+import type { AppAction, RunConfig } from "../types";
 
 export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
   const unlistenOutput = useRef<UnlistenFn | null>(null);
@@ -14,17 +14,17 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
   const pending = useRef<string[]>([]);
   const rafId = useRef<number | null>(null);
 
-  const flush = () => {
+  const flush = useCallback(() => {
     rafId.current = null;
     if (pending.current.length === 0) return;
     const batch = pending.current;
     pending.current = [];
     dispatch({ type: "RUN_OUTPUT_BATCH", payload: batch });
-  };
+  }, [dispatch]);
 
-  const scheduleFlush = () => {
-    if (rafId.current == null) rafId.current = requestAnimationFrame(flush);
-  };
+  const scheduleFlush = useCallback(() => {
+    rafId.current ??= requestAnimationFrame(flush);
+  }, [flush]);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,7 +37,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
     }).then((fn) => {
       if (cancelled) fn();
       else { outputUnsub = fn; unlistenOutput.current = fn; }
-    });
+    }).catch((err) => console.error("[newman] output listener failed:", err));
 
     listen<number>("newman://done", (event) => {
       // Flush any buffered output synchronously so no line lands after the
@@ -51,7 +51,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
     }).then((fn) => {
       if (cancelled) fn();
       else { doneUnsub = fn; unlistenDone.current = fn; }
-    });
+    }).catch((err) => console.error("[newman] done listener failed:", err));
 
     return () => {
       cancelled = true;
@@ -62,7 +62,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
       outputUnsub?.();
       doneUnsub?.();
     };
-  }, [dispatch]);
+  }, [dispatch, flush, scheduleFlush]);
 
   async function startRun(
     collectionPath: string,

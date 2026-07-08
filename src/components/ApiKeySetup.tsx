@@ -2,7 +2,7 @@ import React, { useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { FolderOpen } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AppAction, AppState, SourceSnapshot } from "../types";
+import { type AppAction, type AppState, type SourceSnapshot } from "../types";
 import { usePostmanApi } from "../hooks/usePostmanApi";
 import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 
@@ -67,8 +67,8 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
     e.preventDefault();
     dragCounter.current = 0;
     setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (!file || !file.name.endsWith(".json")) return;
+    const file = e.dataTransfer.files.item(0);
+    if (!file?.name.endsWith(".json")) return;
     const path = (file as unknown as { path?: string }).path;
     if (path) await importCollectionFile(path);
   }
@@ -134,8 +134,8 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        onClick={handleImportCollection}
+        onDrop={(e) => void handleDrop(e)}
+        onClick={() => void handleImportCollection()}
       >
         <span className="drop-zone-icon"><FolderOpen size={32} /></span>
         <span className="drop-zone-text">
@@ -164,10 +164,10 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
             placeholder="PMAK-..."
             value={inputKey}
             onChange={(e) => setInputKey(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSave()}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleSave(); }}
             autoFocus
           />
-          <button className="btn btn--primary" onClick={handleSave} disabled={saving || syncing || !inputKey.trim()}>
+          <button className="btn btn--primary" onClick={() => void handleSave()} disabled={saving || syncing || !inputKey.trim()}>
             {saving ? t("saving") : syncing ? t("syncing") : t("add")}
           </button>
         </div>

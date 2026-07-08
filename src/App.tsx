@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Play, Settings, Trash2, X } from "lucide-react";
 import "./App.css";
@@ -11,7 +11,7 @@ import { SettingsPopup } from "./components/SettingsPopup";
 import { useNewmanRun } from "./hooks/useNewmanRun";
 import { usePostmanApi } from "./hooks/usePostmanApi";
 import { useTheme } from "./hooks/useTheme";
-import { AppAction, AppState, NewmanRunResult, RequestResult } from "./types";
+import { type AppAction, type AppState, type Collection, type LocalCollection, type NewmanRunResult, type PostmanEnvironment, type RequestResult } from "./types";
 
 const initialState: AppState = {
   apiKeys: [],
@@ -64,8 +64,8 @@ export interface RunHistoryEntry {
   selectedEnvironmentUid: string | null;
   activeApiKeyId: string | null;
   selectedWorkspace: string | null;
-  selectedCollection: import("./types").Collection | null;
-  selectedLocalCollection: import("./types").LocalCollection | null;
+  selectedCollection: Collection | null;
+  selectedLocalCollection: LocalCollection | null;
 }
 
 function reducer(state: AppState, action: AppAction): AppState {
@@ -233,8 +233,14 @@ function parseDuration(lines: string[]): number {
 export default function App() {
   const { t } = useTranslation();
 
+  const [clockTick, setClockTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setClockTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
   function formatRelTime(d: Date): string {
-    const diff = Date.now() - d.getTime();
+    const diff = clockTick - d.getTime();
     const mins = Math.floor(diff / 60000);
     if (mins < 1) return t("justNow");
     if (mins < 60) return t("minutesAgo", { count: mins });
@@ -243,6 +249,10 @@ export default function App() {
     return t("daysAgo", { count: Math.floor(hrs / 24) });
   }
   const [state, dispatch] = useReducer(reducer, initialState);
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  });
   const api = usePostmanApi();
   const { startRun, cancelRun } = useNewmanRun(dispatch);
   const { mode: themeMode, setMode: setThemeMode } = useTheme();
@@ -262,8 +272,34 @@ export default function App() {
   });
   const [selectedRun, setSelectedRun] = useState<RunHistoryEntry | null>(null);
   const [setupMode, setSetupMode] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<{ type: "clear" } | { type: "delete"; id: number } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ type: "clear" } | { type: "delete"; id: number } | { type: "deleteSelected" } | null>(null);
+  const [skipDeleteConfirm, setSkipDeleteConfirm] = useState(() => localStorage.getItem("skip-delete-confirm") === "1");
   const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [contextMenu, setContextMenu] = useState<{ id: number; x: number; y: number } | null>(null);
+  const lastClickedId = useRef<number | null>(null);
+  const [pinnedIds, setPinnedIds] = useState<Set<number>>(() => {
+    try {
+      const stored = localStorage.getItem("api-runner-pinned");
+      return stored ? new Set(JSON.parse(stored) as number[]) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("api-runner-pinned", JSON.stringify([...pinnedIds]));
+  }, [pinnedIds]);
+
+  function togglePin(id: number) {
+    setPinnedIds((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }
 
   const [historySidebarWidth, setHistorySidebarWidth] = useState(() => {
     const stored = localStorage.getItem("history-sidebar-width");
@@ -273,7 +309,6 @@ export default function App() {
   const sidebarResizeStartX = useRef(0);
   const sidebarResizeStartW = useRef(0);
   const sidebarWidthRef = useRef(historySidebarWidth);
-  sidebarWidthRef.current = historySidebarWidth;
 
   useEffect(() => {
     const KEY = "api-runner-history";
@@ -322,14 +357,118 @@ export default function App() {
     setTimeout(() => {
       setHistory((h) => h.filter((e) => e.id !== id));
       setDeletingIds((s) => { const n = new Set(s); n.delete(id); return n; });
+      setPinnedIds((s) => { if (!s.has(id)) return s; const n = new Set(s); n.delete(id); return n; });
       if (selectedRun?.id === id) setSelectedRun(null);
     }, 220);
+  }
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("contextmenu", close);
+    window.addEventListener("keydown", (e) => e.key === "Escape" && close());
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("contextmenu", close);
+    };
+  }, [contextMenu]);
+
+  function commitRename() {
+    const name = renameValue.trim();
+    if (name) {
+      setHistory((h) => h.map((e) => (e.id === renamingId ? { ...e, collectionName: name } : e)));
+      setSelectedRun((r) => (r?.id === renamingId ? { ...r, collectionName: name } : r));
+    }
+    setRenamingId(null);
   }
 
   function clearHistory() {
     setHistory([]);
     setSelectedRun(null);
+    setSelectedIds(new Set());
+    setPinnedIds(new Set());
   }
+
+  function deleteSelectedEntries() {
+    const ids = selectedIds;
+    setDeletingIds((s) => new Set([...s, ...ids]));
+    setTimeout(() => {
+      setHistory((h) => h.filter((e) => !ids.has(e.id)));
+      setDeletingIds((s) => { const n = new Set(s); ids.forEach((id) => n.delete(id)); return n; });
+      setPinnedIds((s) => { const n = new Set(s); ids.forEach((id) => n.delete(id)); return n; });
+      if (selectedRun && ids.has(selectedRun.id)) setSelectedRun(null);
+    }, 220);
+    setSelectedIds(new Set());
+  }
+
+  function handleHistoryItemClick(run: RunHistoryEntry, e: React.MouseEvent) {
+    if (e.shiftKey && lastClickedId.current != null) {
+      const fromIdx = history.findIndex((h) => h.id === lastClickedId.current);
+      const toIdx = history.findIndex((h) => h.id === run.id);
+      if (fromIdx !== -1 && toIdx !== -1) {
+        const [start, end] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+        const rangeIds = history.slice(start, end + 1).map((h) => h.id);
+        setSelectedIds((s) => new Set([...s, ...rangeIds]));
+      }
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      setSelectedIds((s) => {
+        const n = new Set(s);
+        if (n.has(run.id)) n.delete(run.id); else n.add(run.id);
+        return n;
+      });
+      lastClickedId.current = run.id;
+      return;
+    }
+    setSelectedIds(new Set());
+    setSelectedRun(run);
+    lastClickedId.current = run.id;
+  }
+
+  useEffect(() => {
+    if (!confirmAction) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setConfirmAction(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmAction]);
+
+  function renderHistoryItem(run: RunHistoryEntry) {
+    return (
+      <div
+        key={run.id}
+        className={`history-item ${selectedRun?.id === run.id ? "history-item--active" : ""} ${selectedIds.has(run.id) ? "history-item--selected" : ""} ${deletingIds.has(run.id) ? "history-item--deleting" : ""}`}
+        onClick={(e) => handleHistoryItemClick(run, e)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setContextMenu({ id: run.id, x: e.clientX, y: e.clientY });
+        }}
+      >
+        <div className="history-item-top">
+          <span className={`history-dot ${run.failed > 0 ? "history-dot--fail" : "history-dot--pass"}`} />
+          <span className="history-item-name">{run.collectionName}</span>
+          <span className="history-item-time">{formatRelTime(run.timestamp)}</span>
+          <button
+            className="history-delete-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (skipDeleteConfirm) deleteHistoryEntry(run.id);
+              else setConfirmAction({ type: "delete", id: run.id });
+            }}
+            title={t("deleteEntry")}
+          ><X size={12} /></button>
+        </div>
+        <div className="history-item-meta">{run.total} iter · {(run.duration / 1000).toFixed(1)}s{run.failed > 0 ? ` · ${run.failed} fail` : ""}</div>
+      </div>
+    );
+  }
+
+  const pinnedRuns = history.filter((h) => pinnedIds.has(h.id));
+  const unpinnedRuns = history.filter((h) => !pinnedIds.has(h.id));
 
   const activeKey = state.apiKeys.find((k) => k.id === state.activeApiKeyId);
 
@@ -352,11 +491,11 @@ export default function App() {
           }
         }
       }
-    });
+    }).catch((err) => console.error("[init] failed to load API keys:", err));
     api.getLocalCollections().then((cols) => {
       dispatch({ type: "SET_LOCAL_COLLECTIONS", payload: cols });
-    });
-  }, []);
+    }).catch((err) => console.error("[init] failed to load local collections:", err));
+  }, [api]);
 
   const hasAnySource = state.apiKeys.length > 0 || state.localCollections.length > 0;
 
@@ -400,8 +539,9 @@ export default function App() {
       if (!runLaunchedRef.current) return;
       invoke<NewmanRunResult>("read_newman_json")
         .then(({ results, stats }) => {
+          const s = stateRef.current;
           dispatch({ type: "SET_REQUEST_RESULTS", payload: results });
-          const collName = state.selectedLocalCollection?.name ?? state.selectedCollection?.name ?? "Run";
+          const collName = s.selectedLocalCollection?.name ?? s.selectedCollection?.name ?? "Run";
           // Counts come straight from newman's JSON report. Pass/fail is measured
           // at the assertion level when the collection has test scripts, else at
           // the request level (network/HTTP errors) so it's never silently zero.
@@ -411,7 +551,7 @@ export default function App() {
           const failed = stats.assertions_failed + stats.requests_failed;
           const passed = Math.max(0, checksTotal - checksFailed);
           const total = stats.iterations;
-          const duration = stats.duration_ms > 0 ? stats.duration_ms : parseDuration(state.outputLines);
+          const duration = stats.duration_ms > 0 ? stats.duration_ms : parseDuration(s.outputLines);
           const entry: RunHistoryEntry = {
             id: Date.now(),
             collectionName: collName,
@@ -422,14 +562,14 @@ export default function App() {
             duration,
             checksTotal,
             assertionsTotal: stats.assertions_total,
-            outputLines: [...state.outputLines],
+            outputLines: [...s.outputLines],
             requestResults: results,
-            runConfig: { ...state.runConfig },
-            selectedEnvironmentUid: state.selectedEnvironmentUid,
-            activeApiKeyId: state.activeApiKeyId,
-            selectedWorkspace: state.selectedWorkspace,
-            selectedCollection: state.selectedCollection ? { ...state.selectedCollection } : null,
-            selectedLocalCollection: state.selectedLocalCollection ? { ...state.selectedLocalCollection } : null,
+            runConfig: { ...s.runConfig },
+            selectedEnvironmentUid: s.selectedEnvironmentUid,
+            activeApiKeyId: s.activeApiKeyId,
+            selectedWorkspace: s.selectedWorkspace,
+            selectedCollection: s.selectedCollection ? { ...s.selectedCollection } : null,
+            selectedLocalCollection: s.selectedLocalCollection ? { ...s.selectedLocalCollection } : null,
           };
           setHistory((h) => [entry, ...h]);
           setSelectedRun(entry);
@@ -443,20 +583,20 @@ export default function App() {
     setTimeout(() => { setConfigOpen(false); setConfigClosing(false); }, 200);
   }
 
-  function handleNewRun() {
+  const handleNewRun = useCallback(() => {
     if (!hasAnySource) {
       setSetupMode(true);
     } else {
       dispatch({ type: "SET_RUN_CONFIG", payload: { iterations: 1, folder: null, selectedRequestIds: null, dataRowIndices: null } });
       setConfigOpen(true);
     }
-  }
+  }, [hasAnySource]);
 
   function handleRerun(entry: RunHistoryEntry) {
     const keyId = entry.activeApiKeyId ?? null;
     const wsId = entry.selectedWorkspace ?? null;
-    let collections: import("./types").Collection[] = [];
-    let environments: import("./types").PostmanEnvironment[] = [];
+    let collections: Collection[] = [];
+    let environments: PostmanEnvironment[] = [];
     if (keyId && wsId) {
       const snapshot = state.snapshots[keyId];
       const ws = snapshot?.workspaces.find((w) => w.workspace.id === wsId);
@@ -487,9 +627,9 @@ export default function App() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [configOpen, hasAnySource]);
+  }, [configOpen, handleNewRun]);
 
-  const canRun = !!(state.selectedCollection || state.selectedLocalCollection);
+  const canRun = !!(state.selectedCollection ?? state.selectedLocalCollection);
 
   if (setupMode) {
     return (
@@ -534,7 +674,19 @@ export default function App() {
               <span className="history-title">{t("history")}</span>
               <span className="history-count-chip">{history.length}</span>
             </div>
-            {history.length > 0 && (
+            {selectedIds.size > 0 ? (
+              <button
+                className="history-clear-btn"
+                onClick={() => {
+                  if (skipDeleteConfirm) deleteSelectedEntries();
+                  else setConfirmAction({ type: "deleteSelected" });
+                }}
+                title={t("deleteEntry")}
+              >
+                <Trash2 size={12} />
+                {t("deleteSelected", { count: selectedIds.size })}
+              </button>
+            ) : history.length > 0 && (
               <button
                 className="history-clear-btn"
                 onClick={() => setConfirmAction({ type: "clear" })}
@@ -546,25 +698,14 @@ export default function App() {
             )}
           </div>
           <div className="history-list">
-            {history.map((run) => (
-              <div
-                key={run.id}
-                className={`history-item ${selectedRun?.id === run.id ? "history-item--active" : ""} ${deletingIds.has(run.id) ? "history-item--deleting" : ""}`}
-                onClick={() => setSelectedRun(run)}
-              >
-                <div className="history-item-top">
-                  <span className={`history-dot ${run.failed > 0 ? "history-dot--fail" : "history-dot--pass"}`} />
-                  <span className="history-item-name">{run.collectionName}</span>
-                  <span className="history-item-time">{formatRelTime(run.timestamp)}</span>
-                  <button
-                    className="history-delete-btn"
-                    onClick={(e) => { e.stopPropagation(); setConfirmAction({ type: "delete", id: run.id }); }}
-                    title={t("deleteEntry")}
-                  ><X size={12} /></button>
-                </div>
-                <div className="history-item-meta">{run.total} iter · {(run.duration / 1000).toFixed(1)}s{run.failed > 0 ? ` · ${run.failed} fail` : ""}</div>
-              </div>
-            ))}
+            {pinnedRuns.length > 0 && (
+              <>
+                <div className="history-section-label">{t("pinned")}</div>
+                {pinnedRuns.map(renderHistoryItem)}
+                <div className="history-section-divider" />
+              </>
+            )}
+            {unpinnedRuns.map(renderHistoryItem)}
             {history.length === 0 && (
               <div className="history-empty">{t("noRuns")}</div>
             )}
@@ -575,6 +716,34 @@ export default function App() {
             </button>
           </div>
         </aside>
+        {contextMenu && (
+          <div
+            className="history-context-menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => {
+                togglePin(contextMenu.id);
+                setContextMenu(null);
+              }}
+            >
+              {pinnedIds.has(contextMenu.id) ? t("unpinEntry") : t("pinEntry")}
+            </button>
+            <button
+              onClick={() => {
+                const run = history.find((h) => h.id === contextMenu.id);
+                if (run) {
+                  setRenamingId(run.id);
+                  setRenameValue(run.collectionName);
+                }
+                setContextMenu(null);
+              }}
+            >
+              {t("renameEntry")}
+            </button>
+          </div>
+        )}
         <div
           className="resize-handle resize-handle--v"
           onMouseDown={(e) => {
@@ -592,7 +761,7 @@ export default function App() {
             <RunConsole
               state={state}
               dispatch={dispatch}
-              onCancel={cancelRun}
+              onCancel={() => { cancelRun().catch((err: unknown) => console.error("[run] cancel failed:", err)); }}
               onBack={() => dispatch({ type: "SET_STEP", payload: 1 })}
             />
           )}
@@ -621,7 +790,7 @@ export default function App() {
           <RunConfigDrawer
             state={state}
             dispatch={dispatch}
-            onRun={handleRun}
+            onRun={() => void handleRun()}
             onClose={closeConfig}
             canRun={canRun}
             api={api}
@@ -641,6 +810,33 @@ export default function App() {
         />
       )}
 
+      {/* Rename dialog */}
+      {renamingId !== null && (
+        <div className="confirm-overlay" onClick={() => setRenamingId(null)}>
+          <div className="confirm-dialog confirm-dialog--compact" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-message">{t("renameEntry")}</div>
+            <input
+              className="rename-dialog-input"
+              value={renameValue}
+              autoFocus
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                else if (e.key === "Escape") setRenamingId(null);
+              }}
+            />
+            <div className="confirm-actions">
+              <button className="confirm-btn confirm-btn--cancel" onClick={() => setRenamingId(null)}>
+                {t("cancel")}
+              </button>
+              <button className="confirm-btn confirm-btn--delete" onClick={commitRename}>
+                {t("save")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Confirmation dialog */}
       {confirmAction && (
         <div className="confirm-overlay" onClick={() => setConfirmAction(null)}>
@@ -648,16 +844,33 @@ export default function App() {
             <div className="confirm-message">
               {confirmAction.type === "clear"
                 ? t("confirmClearHistory")
+                : confirmAction.type === "deleteSelected"
+                ? t("confirmDeleteSelected", { count: selectedIds.size })
                 : t("confirmDeleteEntry")}
             </div>
+            {(confirmAction.type === "delete" || confirmAction.type === "deleteSelected") && (
+              <label className="confirm-skip-label">
+                <input
+                  type="checkbox"
+                  checked={skipDeleteConfirm}
+                  onChange={(e) => {
+                    setSkipDeleteConfirm(e.target.checked);
+                    localStorage.setItem("skip-delete-confirm", e.target.checked ? "1" : "0");
+                  }}
+                />
+                {t("dontAskAgain")}
+              </label>
+            )}
             <div className="confirm-actions">
               <button className="confirm-btn confirm-btn--cancel" onClick={() => setConfirmAction(null)}>
                 {t("cancel")}
               </button>
               <button
                 className="confirm-btn confirm-btn--delete"
+                autoFocus
                 onClick={() => {
                   if (confirmAction.type === "clear") clearHistory();
+                  else if (confirmAction.type === "deleteSelected") deleteSelectedEntries();
                   else deleteHistoryEntry(confirmAction.id);
                   setConfirmAction(null);
                 }}

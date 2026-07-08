@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ApiKeyEntry, Collection, CollectionItem, LocalCollection, PostmanEnvironment, SourceSnapshot, Workspace } from "../types";
+import { useMemo } from "react";
+import type { ApiKeyEntry, Collection, CollectionItem, LocalCollection, PostmanEnvironment, SourceSnapshot, Workspace } from "../types";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -38,6 +39,10 @@ function isFresh<T>(entry: CacheEntry<T> | undefined): entry is CacheEntry<T> {
 }
 
 export function usePostmanApi() {
+  return useMemo(() => makePostmanApi(), []);
+}
+
+function makePostmanApi() {
   async function getApiKeys(): Promise<ApiKeyEntry[]> {
     return invoke<ApiKeyEntry[]>("get_api_keys");
   }

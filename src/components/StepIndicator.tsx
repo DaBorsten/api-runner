@@ -1,6 +1,6 @@
 import React from "react";
 import { Check } from "lucide-react";
-import { Step } from "../types";
+import type { Step } from "../types";
 
 const STEPS = ["API Key", "Workspace", "Collection", "Configure", "Run"];
 

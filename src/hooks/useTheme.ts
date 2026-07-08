@@ -9,7 +9,7 @@ function getSystemTheme(): "light" | "dark" {
 
 export function useTheme() {
   const [mode, setMode] = useState<ThemeMode>(
-    () => (localStorage.getItem("theme") as ThemeMode) ?? "system"
+    () => (localStorage.getItem("theme") as ThemeMode | null) ?? "system"
   );
 
   useEffect(() => {

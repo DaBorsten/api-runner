@@ -2,7 +2,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { Folder, Play, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AppAction, AppState } from "../types";
+import { type AppAction, type AppState } from "../types";
 
 interface Props {
   state: AppState;
@@ -43,7 +43,7 @@ export function RunConfig({ state, dispatch, onRun, canRun }: Props) {
       {!canRun && (
         <div className="banner banner--warn">{t("selectCollectionWarning")}</div>
       )}
-      {(state.selectedCollection || state.selectedLocalCollection) && (
+      {(state.selectedCollection ?? state.selectedLocalCollection) && (
         <div className="run-target">
           <span className="run-target__label">Collection</span>
           <span className="run-target__name">
@@ -79,7 +79,7 @@ export function RunConfig({ state, dispatch, onRun, canRun }: Props) {
             ) : (
               <span className="file-path">None</span>
             )}
-            <button className="btn btn--sm" onClick={pickDataFile}>Browse</button>
+            <button className="btn btn--sm" onClick={() => void pickDataFile()}>Browse</button>
           </div>
         </div>
 
@@ -87,7 +87,7 @@ export function RunConfig({ state, dispatch, onRun, canRun }: Props) {
           <label className="config-label">Environment File (optional)</label>
           <div className="file-pick-row">
             <span className="file-path">{cfg.envFile ?? "None"}</span>
-            <button className="btn btn--sm" onClick={pickEnvFile}>Browse</button>
+            <button className="btn btn--sm" onClick={() => void pickEnvFile()}>Browse</button>
             {cfg.envFile && (
               <button className="btn btn--sm btn--ghost" onClick={() => setConfig({ envFile: null })}>Clear</button>
             )}

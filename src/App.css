@@ -1026,6 +1026,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  user-select: none;
 }
 
 .history-header {
@@ -1065,6 +1066,7 @@ body {
 .history-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 6px 8px;
 }
 
@@ -1077,6 +1079,7 @@ body {
 }
 .history-item:hover { background: var(--surface2); transform: translateX(2px); }
 .history-item--active { background: rgba(255,108,55,0.10); }
+.history-item--selected { background: rgba(80,140,255,0.14); outline: 1px solid rgba(80,140,255,0.4); outline-offset: -1px; }
 .history-item:hover .history-delete-btn { opacity: 1; }
 .history-item--deleting {
   animation: historyItemDelete 0.22s var(--ease-in-out-strong) forwards;
@@ -1143,6 +1146,21 @@ body {
 .history-dot--pass { background: var(--green); }
 .history-dot--fail { background: var(--red); }
 
+.history-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 10px 4px;
+}
+
+.history-section-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 4px 8px;
+}
+
 .history-item-name {
   font-size: 13px;
   font-weight: 500;
@@ -1150,6 +1168,51 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+}
+
+.history-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--surface, var(--bg));
+  border: 1px solid var(--border, #444);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  min-width: 140px;
+}
+.history-context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.history-context-menu button:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.rename-dialog-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  margin-bottom: 20px;
+  box-sizing: border-box;
+}
+.rename-dialog-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .history-item-time {
@@ -1228,6 +1291,14 @@ body {
   animation: confirmDialogIn 0.2s var(--ease-out-strong);
 }
 
+.confirm-dialog--compact {
+  padding: 16px;
+}
+
+.confirm-dialog--compact .confirm-message {
+  margin-bottom: 12px;
+}
+
 @keyframes confirmDialogIn {
   from { opacity: 0; transform: scale(0.95) translateY(4px); }
   to   { opacity: 1; transform: scale(1) translateY(0); }
@@ -1238,6 +1309,20 @@ body {
   line-height: 1.5;
   color: var(--text);
   margin-bottom: 20px;
+}
+
+.confirm-message + .confirm-skip-label {
+  margin-top: -12px;
+}
+
+.confirm-skip-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, var(--text));
+  margin-bottom: 20px;
+  cursor: pointer;
 }
 
 .confirm-actions {

@@ -1,8 +1,8 @@
 import React, { useState, useRef, useLayoutEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, X, ChevronUp, ChevronDown, Play, Terminal } from "lucide-react";
-import { AppAction, AppState, RequestResult } from "../types";
-import { RunHistoryEntry } from "../App";
+import type { AppAction, AppState, RequestResult } from "../types";
+import type { RunHistoryEntry } from "../App";
 
 interface Props {
   run: RunHistoryEntry | null;
@@ -255,9 +255,10 @@ function RequestResultRow({ result, showIter, emptyResponse }: { result: Request
   );
 }
 
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, "g");
+
 function stripAnsi(line: string): string {
-  // eslint-disable-next-line no-control-regex
-  return line.replace(/\x1b\[[0-9;]*m/g, "");
+  return line.replace(ANSI_ESCAPE_RE, "");
 }
 
 function getConsoleLineClass(line: string): string {
