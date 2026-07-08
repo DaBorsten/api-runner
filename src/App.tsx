@@ -404,11 +404,15 @@ export default function App() {
 
   function handleHistoryItemClick(run: RunHistoryEntry, e: React.MouseEvent) {
     if (e.shiftKey && lastClickedId.current != null) {
-      const fromIdx = history.findIndex((h) => h.id === lastClickedId.current);
-      const toIdx = history.findIndex((h) => h.id === run.id);
+      const displayOrder = [
+        ...history.filter((h) => pinnedIds.has(h.id)),
+        ...history.filter((h) => !pinnedIds.has(h.id)),
+      ];
+      const fromIdx = displayOrder.findIndex((h) => h.id === lastClickedId.current);
+      const toIdx = displayOrder.findIndex((h) => h.id === run.id);
       if (fromIdx !== -1 && toIdx !== -1) {
         const [start, end] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
-        const rangeIds = history.slice(start, end + 1).map((h) => h.id);
+        const rangeIds = displayOrder.slice(start, end + 1).map((h) => h.id);
         setSelectedIds((s) => new Set([...s, ...rangeIds]));
       }
       return;
@@ -624,10 +628,25 @@ export default function App() {
         e.preventDefault();
         handleNewRun();
       }
+      if (e.key === "Escape" && selectedIds.size > 0) {
+        setSelectedIds(new Set());
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [configOpen, handleNewRun]);
+  }, [configOpen, handleNewRun, selectedIds]);
+
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      if (selectedIds.size === 0) return;
+      const target = e.target as HTMLElement;
+      if (!target.closest(".history-list")) {
+        setSelectedIds(new Set());
+      }
+    }
+    window.addEventListener("mousedown", onMouseDown);
+    return () => window.removeEventListener("mousedown", onMouseDown);
+  }, [selectedIds]);
 
   const canRun = !!(state.selectedCollection ?? state.selectedLocalCollection);
 
