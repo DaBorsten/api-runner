@@ -1,9 +1,37 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Folder, FolderOpen, X, Check, ChevronDown, ChevronRight, Minus, Plus, Play, Key, FileText, RefreshCw, AlertCircle, Upload, Globe, ArrowLeft } from "lucide-react";
+import {
+  Folder,
+  FolderOpen,
+  X,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Minus,
+  Plus,
+  Play,
+  Key,
+  FileText,
+  RefreshCw,
+  AlertCircle,
+  Upload,
+  Globe,
+  ArrowLeft,
+} from "lucide-react";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { type ApiKeyEntry, type AppAction, type AppState, type CollectionFolder, type CollectionItem, type CollectionRequest, isFolder, type LocalCollection, type SourceSnapshot, type WorkspaceSnapshot } from "../types";
+import {
+  type ApiKeyEntry,
+  type AppAction,
+  type AppState,
+  type CollectionFolder,
+  type CollectionItem,
+  type CollectionRequest,
+  isFolder,
+  type LocalCollection,
+  type SourceSnapshot,
+  type WorkspaceSnapshot,
+} from "../types";
 import { type usePostmanApi } from "../hooks/usePostmanApi";
 import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 import { DataFilePreview } from "./DataFilePreview";
@@ -21,22 +49,71 @@ interface Props {
   syncStatus?: "idle" | "syncing" | "error";
 }
 
+// Collections whose content must be (re)fetched from the Postman API: brand
+// new collections, and existing ones whose `updated_at` moved since the last
+// sync. Everything else can reuse the cached `collection_items` from the
+// previous snapshot, avoiding a per-collection detail request on every sync.
+function collectionsNeedingRefetch(
+  existing: SourceSnapshot | null,
+  fresh: WorkspaceSnapshot[],
+): { workspaceId: string; collection: WorkspaceSnapshot["collections"][number] }[] {
+  const existingMap = new Map(
+    (existing?.workspaces ?? []).map((ws) => [ws.workspace.id, ws]),
+  );
+  const out: { workspaceId: string; collection: WorkspaceSnapshot["collections"][number] }[] = [];
+  for (const freshWs of fresh) {
+    const prev = existingMap.get(freshWs.workspace.id);
+    for (const c of freshWs.collections) {
+      const prevCol = prev?.collections.find((p) => p.uid === c.uid);
+      const hasCachedItems = !!prev?.collection_items?.[c.uid];
+      const changed = !prevCol || prevCol.updated_at !== c.updated_at;
+      if (changed || !hasCachedItems) out.push({ workspaceId: freshWs.workspace.id, collection: c });
+    }
+  }
+  return out;
+}
 
-function deltaSync(existing: SourceSnapshot | null, fresh: WorkspaceSnapshot[]): WorkspaceSnapshot[] {
+function deltaSync(
+  existing: SourceSnapshot | null,
+  fresh: WorkspaceSnapshot[],
+): WorkspaceSnapshot[] {
   if (!existing) return fresh;
-  const existingMap = new Map(existing.workspaces.map((ws) => [ws.workspace.id, ws]));
+  const existingMap = new Map(
+    existing.workspaces.map((ws) => [ws.workspace.id, ws]),
+  );
   return fresh.map((freshWs) => {
     const prev = existingMap.get(freshWs.workspace.id);
     if (!prev) return freshWs;
-    const colChanged =
-      freshWs.collections.some((c) => !prev.collections.find((p) => p.uid === c.uid && p.name === c.name)) ||
-      prev.collections.some((c) => !freshWs.collections.find((f) => f.uid === c.uid));
-    const envChanged =
-      freshWs.environments.some((e) => !prev.environments.find((p) => p.uid === e.uid && p.name === e.name)) ||
-      prev.environments.some((e) => !freshWs.environments.find((f) => f.uid === e.uid));
-    const wsChanged = prev.workspace.name !== freshWs.workspace.name;
-    return colChanged || envChanged || wsChanged ? freshWs : prev;
+    // Carry over cached collection_items for collections that are unchanged.
+    const collection_items: Record<string, CollectionItem[]> = {};
+    for (const c of freshWs.collections) {
+      const prevCol = prev.collections.find((p) => p.uid === c.uid);
+      const unchanged = prevCol && prevCol.updated_at === c.updated_at;
+      const cached = prev.collection_items?.[c.uid];
+      if (unchanged && cached) collection_items[c.uid] = cached;
+    }
+    return { ...freshWs, collection_items };
   });
+}
+
+// Runs `fn` over `items` with at most `limit` in flight at once, so a sync
+// with many workspaces/collections doesn't blow through Postman's rate limit
+// (~60 req/min) by firing everything via Promise.all at the same instant.
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 function getAllRequestIds(items: CollectionItem[]): string[] {
@@ -52,11 +129,15 @@ function getFolderRequestIds(folder: CollectionFolder): string[] {
   return getAllRequestIds(folder.item);
 }
 
-function getFlatVisibleRequestIds(items: CollectionItem[], expandedIds: Set<string>): string[] {
+function getFlatVisibleRequestIds(
+  items: CollectionItem[],
+  expandedIds: Set<string>,
+): string[] {
   const ids: string[] = [];
   for (const item of items) {
     if (isFolder(item)) {
-      if (expandedIds.has(item.id)) ids.push(...getFlatVisibleRequestIds(item.item, expandedIds));
+      if (expandedIds.has(item.id))
+        ids.push(...getFlatVisibleRequestIds(item.item, expandedIds));
     } else {
       ids.push(item.id);
     }
@@ -64,7 +145,16 @@ function getFlatVisibleRequestIds(items: CollectionItem[], expandedIds: Set<stri
   return ids;
 }
 
-export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage, snapshots, syncStatus }: Props) {
+export function RunConfigDrawer({
+  state,
+  dispatch,
+  onRun,
+  onClose,
+  api,
+  fullPage,
+  snapshots,
+  syncStatus,
+}: Props) {
   const { t } = useTranslation();
   const stateRef = useRef(state);
   useEffect(() => {
@@ -73,13 +163,16 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
 
   // One-time warning before importing a local collection (its scripts run on the
   // user's machine). Shared by the file-picker and drag-and-drop import paths.
-  const ensureLocalTrust = useCallback(() =>
-    confirmLocalCollectionTrust({
-      title: t("localTrustTitle"),
-      message: t("localTrustMessage"),
-      okLabel: t("localTrustOk"),
-      cancelLabel: t("localTrustCancel"),
-    }), [t]);
+  const ensureLocalTrust = useCallback(
+    () =>
+      confirmLocalCollectionTrust({
+        title: t("localTrustTitle"),
+        message: t("localTrustMessage"),
+        okLabel: t("localTrustOk"),
+        cancelLabel: t("localTrustCancel"),
+      }),
+    [t],
+  );
 
   const [folderItems, setFolderItems] = useState<CollectionItem[]>([]);
   const [foldersLoading, setFoldersLoading] = useState(false);
@@ -94,23 +187,30 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   const envDropdownRef = useRef<HTMLDivElement>(null);
   const lastClickedIdRef = useRef<string | null>(null);
 
-  const selectedRequestIds: Set<string> = new Set(state.runConfig.selectedRequestIds ?? []);
+  const selectedRequestIds: Set<string> = new Set(
+    state.runConfig.selectedRequestIds ?? [],
+  );
 
   function getAllFolderIds(items: CollectionItem[]): string[] {
     const ids: string[] = [];
     for (const item of items) {
-      if (isFolder(item)) { ids.push(item.id); ids.push(...getAllFolderIds(item.item)); }
+      if (isFolder(item)) {
+        ids.push(item.id);
+        ids.push(...getAllFolderIds(item.item));
+      }
     }
     return ids;
   }
 
   const allFolderIds = getAllFolderIds(folderItems);
-  const allExpanded = allFolderIds.length > 0 && allFolderIds.every((id) => expandedIds.has(id));
+  const allExpanded =
+    allFolderIds.length > 0 && allFolderIds.every((id) => expandedIds.has(id));
 
   function toggleExpandedId(id: string, open: boolean) {
     setExpandedIds((prev) => {
       const next = new Set(prev);
-      if (open) next.add(id); else next.delete(id);
+      if (open) next.add(id);
+      else next.delete(id);
       return next;
     });
   }
@@ -122,27 +222,43 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
 
   // Tick every request in the freshly loaded collection so a newly selected
   // collection runs everything by default.
-  const selectAllRequests = useCallback((items: CollectionItem[]) => {
-    const ids = getAllRequestIds(items);
-    dispatch({ type: "SET_RUN_CONFIG", payload: { selectedRequestIds: ids.length > 0 ? ids : null } });
-  }, [dispatch]);
+  const selectAllRequests = useCallback(
+    (items: CollectionItem[]) => {
+      const ids = getAllRequestIds(items);
+      dispatch({
+        type: "SET_RUN_CONFIG",
+        payload: { selectedRequestIds: ids.length > 0 ? ids : null },
+      });
+    },
+    [dispatch],
+  );
 
   const allRequestIds = getAllRequestIds(folderItems);
   const allRequestsSelected =
-    allRequestIds.length > 0 && allRequestIds.every((id) => selectedRequestIds.has(id));
-  const someRequestsSelected = allRequestIds.some((id) => selectedRequestIds.has(id));
+    allRequestIds.length > 0 &&
+    allRequestIds.every((id) => selectedRequestIds.has(id));
+  const someRequestsSelected = allRequestIds.some((id) =>
+    selectedRequestIds.has(id),
+  );
 
   function handleToggleAllRequests() {
     if (allRequestsSelected) {
-      dispatch({ type: "SET_RUN_CONFIG", payload: { selectedRequestIds: null } });
+      dispatch({
+        type: "SET_RUN_CONFIG",
+        payload: { selectedRequestIds: null },
+      });
     } else {
-      dispatch({ type: "SET_RUN_CONFIG", payload: { selectedRequestIds: allRequestIds } });
+      dispatch({
+        type: "SET_RUN_CONFIG",
+        payload: { selectedRequestIds: allRequestIds },
+      });
     }
   }
 
   useEffect(() => {
     if (masterCheckboxRef.current) {
-      masterCheckboxRef.current.indeterminate = someRequestsSelected && !allRequestsSelected;
+      masterCheckboxRef.current.indeterminate =
+        someRequestsSelected && !allRequestsSelected;
     }
   }, [someRequestsSelected, allRequestsSelected]);
 
@@ -152,12 +268,16 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       const lastIdx = flatIds.indexOf(lastClickedIdRef.current);
       const currIdx = flatIds.indexOf(requestId);
       if (lastIdx !== -1 && currIdx !== -1) {
-        const [from, to] = lastIdx < currIdx ? [lastIdx, currIdx] : [currIdx, lastIdx];
+        const [from, to] =
+          lastIdx < currIdx ? [lastIdx, currIdx] : [currIdx, lastIdx];
         const rangeIds = flatIds.slice(from, to + 1);
         const selecting = !selectedRequestIds.has(requestId);
         const next = new Set(selectedRequestIds);
         rangeIds.forEach((id) => (selecting ? next.add(id) : next.delete(id)));
-        dispatch({ type: "SET_RUN_CONFIG", payload: { selectedRequestIds: next.size > 0 ? [...next] : null } });
+        dispatch({
+          type: "SET_RUN_CONFIG",
+          payload: { selectedRequestIds: next.size > 0 ? [...next] : null },
+        });
         lastClickedIdRef.current = requestId;
         return;
       }
@@ -165,7 +285,10 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     const next = new Set(selectedRequestIds);
     if (next.has(requestId)) next.delete(requestId);
     else next.add(requestId);
-    dispatch({ type: "SET_RUN_CONFIG", payload: { selectedRequestIds: next.size > 0 ? [...next] : null } });
+    dispatch({
+      type: "SET_RUN_CONFIG",
+      payload: { selectedRequestIds: next.size > 0 ? [...next] : null },
+    });
     lastClickedIdRef.current = requestId;
   }
 
@@ -178,11 +301,16 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     } else {
       folderReqIds.forEach((id) => next.add(id));
     }
-    dispatch({ type: "SET_RUN_CONFIG", payload: { selectedRequestIds: next.size > 0 ? [...next] : null } });
+    dispatch({
+      type: "SET_RUN_CONFIG",
+      payload: { selectedRequestIds: next.size > 0 ? [...next] : null },
+    });
   }
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [openDropdown, setOpenDropdown] = useState<"source" | "workspace" | "collection" | "environment" | null>(null);
+  const [openDropdown, setOpenDropdown] = useState<
+    "source" | "workspace" | "collection" | "environment" | null
+  >(null);
 
   function filterItems(items: CollectionItem[], q: string): CollectionItem[] {
     if (!q) return items;
@@ -212,17 +340,26 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   const [inputLabel, setInputLabel] = useState("");
   const [inputKey, setInputKey] = useState("");
   const [inputLocalName, setInputLocalName] = useState("");
-  const [pendingLocalFile, setPendingLocalFile] = useState<{ path: string; defaultName: string } | null>(null);
+  const [pendingLocalFile, setPendingLocalFile] = useState<{
+    path: string;
+    defaultName: string;
+  } | null>(null);
   const [renamingColId, setRenamingColId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [showManageDialog, setShowManageDialog] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [dragging, setDragging] = useState<"idle" | "valid" | "invalid">("idle");
+  const [dragging, setDragging] = useState<"idle" | "valid" | "invalid">(
+    "idle",
+  );
   const dragCounter = useRef(0);
   const popupRef = useRef<HTMLDivElement>(null);
-  const [dataFileDragging, setDataFileDragging] = useState<"idle" | "valid" | "invalid">("idle");
+  const [dataFileDragging, setDataFileDragging] = useState<
+    "idle" | "valid" | "invalid"
+  >("idle");
   const [dataColumnCount, setDataColumnCount] = useState(0);
-  const [envMode, setEnvMode] = useState<"postman" | "local">(state.runConfig.envFile ? "local" : "postman");
+  const [envMode, setEnvMode] = useState<"postman" | "local">(
+    state.runConfig.envFile ? "local" : "postman",
+  );
 
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     const stored = localStorage.getItem("config-right-width");
@@ -239,51 +376,73 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   useEffect(() => {
     if (!showAddPopup || popupTab !== "file") return;
     let unlisten: (() => void) | undefined;
-    getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "enter") {
-        const isJson = event.payload.paths[0]?.toLowerCase().endsWith(".json") ?? false;
-        setDragging(isJson ? "valid" : "invalid");
-      } else if (event.payload.type === "leave") {
-        setDragging("idle");
-      } else if (event.payload.type === "drop") {
-        setDragging("idle");
-        const path: string | undefined = event.payload.paths[0];
-        if (!path) return;
-        if (!path.toLowerCase().endsWith(".json")) return;
-        const fileName = path.split(/[\\/]/).pop() ?? path;
-        const defaultName = fileName.replace(/\.json$/i, "");
-        ensureLocalTrust().then((trusted) => {
-          if (!trusted) return;
-          setPendingLocalFile({ path, defaultName });
-          setInputLocalName(defaultName);
-        }).catch((err) => console.error("[drop] trust check failed:", err));
-      }
-    }).then((fn) => { unlisten = fn; }).catch((err) => console.error("[drop] listener setup failed:", err));
-    return () => { unlisten?.(); };
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "enter") {
+          const isJson =
+            event.payload.paths[0]?.toLowerCase().endsWith(".json") ?? false;
+          setDragging(isJson ? "valid" : "invalid");
+        } else if (event.payload.type === "leave") {
+          setDragging("idle");
+        } else if (event.payload.type === "drop") {
+          setDragging("idle");
+          const path: string | undefined = event.payload.paths[0];
+          if (!path) return;
+          if (!path.toLowerCase().endsWith(".json")) return;
+          const fileName = path.split(/[\\/]/).pop() ?? path;
+          const defaultName = fileName.replace(/\.json$/i, "");
+          ensureLocalTrust()
+            .then((trusted) => {
+              if (!trusted) return;
+              setPendingLocalFile({ path, defaultName });
+              setInputLocalName(defaultName);
+            })
+            .catch((err) => console.error("[drop] trust check failed:", err));
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => console.error("[drop] listener setup failed:", err));
+    return () => {
+      unlisten?.();
+    };
   }, [showAddPopup, popupTab, ensureLocalTrust]);
 
   useEffect(() => {
     if (showAddPopup) return;
     let unlisten: (() => void) | undefined;
-    getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "enter") {
-        const p = event.payload.paths[0]?.toLowerCase() ?? "";
-        setDataFileDragging(p.endsWith(".json") || p.endsWith(".csv") ? "valid" : "invalid");
-      } else if (event.payload.type === "leave") {
-        setDataFileDragging("idle");
-      } else if (event.payload.type === "drop") {
-        setDataFileDragging("idle");
-        const filePath: string | undefined = event.payload.paths[0];
-        if (!filePath) return;
-        const lower = filePath.toLowerCase();
-        if (!lower.endsWith(".json") && !lower.endsWith(".csv")) return;
-        dataRowUserChangedRef.current = true;
-        dataRowUserChangedFileRef.current = filePath;
-        dispatch({ type: "SET_RUN_CONFIG", payload: { dataFile: filePath, dataRowIndices: null } });
-        setDataPreviewCollapsed(false);
-      }
-    }).then((fn) => { unlisten = fn; }).catch((err) => console.error("[drop] listener setup failed:", err));
-    return () => { unlisten?.(); };
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "enter") {
+          const p = event.payload.paths[0]?.toLowerCase() ?? "";
+          setDataFileDragging(
+            p.endsWith(".json") || p.endsWith(".csv") ? "valid" : "invalid",
+          );
+        } else if (event.payload.type === "leave") {
+          setDataFileDragging("idle");
+        } else if (event.payload.type === "drop") {
+          setDataFileDragging("idle");
+          const filePath: string | undefined = event.payload.paths[0];
+          if (!filePath) return;
+          const lower = filePath.toLowerCase();
+          if (!lower.endsWith(".json") && !lower.endsWith(".csv")) return;
+          dataRowUserChangedRef.current = true;
+          dataRowUserChangedFileRef.current = filePath;
+          dispatch({
+            type: "SET_RUN_CONFIG",
+            payload: { dataFile: filePath, dataRowIndices: null },
+          });
+          setDataPreviewCollapsed(false);
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => console.error("[drop] listener setup failed:", err));
+    return () => {
+      unlisten?.();
+    };
   }, [showAddPopup, dispatch]);
 
   const [prevEnvFile, setPrevEnvFile] = useState(state.runConfig.envFile);
@@ -296,10 +455,17 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     if (openDropdown !== "environment") return;
     let downOutside = false;
     function onDown(e: MouseEvent) {
-      downOutside = !!(envDropdownRef.current && !envDropdownRef.current.contains(e.target as Node));
+      downOutside = !!(
+        envDropdownRef.current &&
+        !envDropdownRef.current.contains(e.target as Node)
+      );
     }
     function onUp(e: MouseEvent) {
-      if (downOutside && envDropdownRef.current && !envDropdownRef.current.contains(e.target as Node)) {
+      if (
+        downOutside &&
+        envDropdownRef.current &&
+        !envDropdownRef.current.contains(e.target as Node)
+      ) {
         setOpenDropdown(null);
       }
       downOutside = false;
@@ -315,7 +481,13 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   useEffect(() => {
     function onMove(e: MouseEvent) {
       if (!rightResizing.current) return;
-      const w = Math.max(320, Math.min(500, rightResizeStartW.current + rightResizeStartX.current - e.clientX));
+      const w = Math.max(
+        320,
+        Math.min(
+          500,
+          rightResizeStartW.current + rightResizeStartX.current - e.clientX,
+        ),
+      );
       setRightPanelWidth(w);
       rightWidthRef.current = w;
     }
@@ -327,13 +499,19 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
   }, []);
 
   const cfg = state.runConfig;
   const activeKey = state.apiKeys.find((k) => k.id === state.activeApiKeyId);
-  const selectedWorkspace = state.workspaces.find((w) => w.id === state.selectedWorkspace);
-  const selectedName = state.selectedLocalCollection?.name ?? state.selectedCollection?.name ?? "";
+  const selectedWorkspace = state.workspaces.find(
+    (w) => w.id === state.selectedWorkspace,
+  );
+  const selectedName =
+    state.selectedLocalCollection?.name ?? state.selectedCollection?.name ?? "";
   const canRun = !!(state.selectedCollection ?? state.selectedLocalCollection);
   // The run additionally requires at least one request ticked in the tree.
   const runEnabled = canRun && selectedRequestIds.size > 0;
@@ -342,7 +520,8 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   const [prevCollectionKey, setPrevCollectionKey] = useState(collectionKey);
   if (prevCollectionKey !== collectionKey) {
     setPrevCollectionKey(collectionKey);
-    if (state.selectedCollection || state.selectedLocalCollection) setFoldersLoading(true);
+    if (state.selectedCollection || state.selectedLocalCollection)
+      setFoldersLoading(true);
     else setFolderItems([]);
   }
 
@@ -353,14 +532,26 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     const myId = ++folderReqId.current;
     const targetUid = s.selectedCollection.uid;
     try {
-      const items = await api.fetchCollectionDetail(currentActiveKey.id, targetUid);
+      // Already synced into the snapshot (add/refresh keeps this current) —
+      // skip the network round-trip entirely when we have it.
+      const wsSnap = snapshots?.[currentActiveKey.id]?.workspaces.find(
+        (w) => w.workspace.id === s.selectedWorkspace,
+      );
+      const cached = wsSnap?.collection_items?.[targetUid];
+      // An empty [] means the sync's detail fetch failed (placeholder) — fetch
+      // on demand rather than showing an empty collection.
+      const items =
+        cached && cached.length > 0
+          ? cached
+          : await api.fetchCollectionDetail(currentActiveKey.id, targetUid);
       if (myId !== folderReqId.current) return;
       setFolderItems(items);
       setExpandedIds(new Set());
       lastClickedIdRef.current = null;
       const loadedIds = getAllRequestIds(items);
       const existing = stateRef.current.runConfig.selectedRequestIds;
-      const hasOverlap = existing !== null && loadedIds.some((id) => existing.includes(id));
+      const hasOverlap =
+        existing !== null && loadedIds.some((id) => existing.includes(id));
       if (!hasOverlap) selectAllRequests(items);
     } catch {
       if (myId !== folderReqId.current) return;
@@ -368,7 +559,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     } finally {
       if (myId === folderReqId.current) setFoldersLoading(false);
     }
-  }, [api, selectAllRequests]);
+  }, [api, selectAllRequests, snapshots]);
 
   const loadLocalFolders = useCallback(async () => {
     const s = stateRef.current;
@@ -383,7 +574,8 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       lastClickedIdRef.current = null;
       const loadedIds = getAllRequestIds(items);
       const existing = stateRef.current.runConfig.selectedRequestIds;
-      const hasOverlap = existing !== null && loadedIds.some((id) => existing.includes(id));
+      const hasOverlap =
+        existing !== null && loadedIds.some((id) => existing.includes(id));
       if (!hasOverlap) selectAllRequests(items);
     } catch {
       if (myId !== folderReqId.current) return;
@@ -400,25 +592,64 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       else if (s.selectedLocalCollection) await loadLocalFolders();
     }
     void run();
-  }, [state.selectedCollection?.uid, state.selectedLocalCollection?.id, activeKey, loadFolders, loadLocalFolders]);
+  }, [
+    state.selectedCollection?.uid,
+    state.selectedLocalCollection?.id,
+    activeKey,
+    loadFolders,
+    loadLocalFolders,
+  ]);
 
   // Core sync logic – accepts an explicit key so it can be called before state has updated
   async function performSync(keyToSync: ApiKeyEntry) {
+    // Guards against double-clicking refresh (or add-key racing a refresh):
+    // a second sync while one is in flight would double the request volume
+    // and is exactly what triggers Postman's 429s.
+    if (stateRef.current.syncStatus === "syncing") return;
     dispatch({ type: "SET_SYNC_STATUS", payload: "syncing" });
     dispatch({ type: "SET_SYNC_ERROR", payload: null });
     try {
       const freshWorkspaces = await api.fetchWorkspaces(keyToSync.id, true);
-      const freshWsSnapshots: WorkspaceSnapshot[] = await Promise.all(
-        freshWorkspaces.map(async (ws) => {
-          const [cols, envs] = await Promise.all([
-            api.fetchCollections(keyToSync.id, ws.id, true),
-            api.fetchEnvironments(keyToSync.id, ws.id, true),
-          ]);
+      // Sequential-ish with a small concurrency cap instead of firing every
+      // workspace's requests at once — keeps us under Postman's rate limit.
+      const freshWsSnapshots: WorkspaceSnapshot[] = await mapLimit(
+        freshWorkspaces,
+        3,
+        async (ws) => {
+          const cols = await api.fetchCollections(keyToSync.id, ws.id, true);
+          const envs = await api.fetchEnvironments(keyToSync.id, ws.id, true);
           return { workspace: ws, collections: cols, environments: envs };
-        })
+        },
       );
       const existing = snapshots?.[keyToSync.id] ?? null;
       const merged = deltaSync(existing, freshWsSnapshots);
+
+      // Only fetch full contents (folders/requests) for collections that are
+      // new or whose updated_at moved — everything else reuses the snapshot.
+      const toFetch = collectionsNeedingRefetch(existing, freshWsSnapshots);
+      await mapLimit(toFetch, 3, async ({ workspaceId, collection }) => {
+        try {
+          const items = await api.fetchCollectionDetail(
+            keyToSync.id,
+            collection.uid,
+            true,
+          );
+          const ws = merged.find((w) => w.workspace.id === workspaceId);
+          if (ws) {
+            ws.collection_items = { ...ws.collection_items, [collection.uid]: items };
+          }
+        } catch (err) {
+          // Mark as attempted with an empty cache so we don't refetch it on
+          // every sync — only when its updated_at moves. The drawer fetches
+          // on demand if the user actually opens it.
+          const ws = merged.find((w) => w.workspace.id === workspaceId);
+          if (ws && !ws.collection_items?.[collection.uid]) {
+            ws.collection_items = { ...ws.collection_items, [collection.uid]: [] };
+          }
+          console.error(`[sync] detail fetch failed for ${collection.uid}:`, err);
+        }
+      });
+
       const snapshot: SourceSnapshot = {
         api_key_id: keyToSync.id,
         workspaces: merged,
@@ -431,7 +662,8 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       if (wsData.length > 0) {
         const targetWsId = state.selectedWorkspace ?? wsData[0].id;
         dispatch({ type: "SELECT_WORKSPACE", payload: targetWsId });
-        const wsSnap = merged.find((s) => s.workspace.id === targetWsId) ?? merged[0];
+        const wsSnap =
+          merged.find((s) => s.workspace.id === targetWsId) ?? merged[0];
         dispatch({ type: "SET_COLLECTIONS", payload: wsSnap.collections });
         dispatch({ type: "SET_ENVIRONMENTS", payload: wsSnap.environments });
       }
@@ -447,12 +679,19 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     await performSync(activeKey);
   }
 
-  const setConfig = useCallback((patch: Partial<typeof cfg>) => {
-    dispatch({ type: "SET_RUN_CONFIG", payload: patch });
-  }, [dispatch]);
+  const setConfig = useCallback(
+    (patch: Partial<typeof cfg>) => {
+      dispatch({ type: "SET_RUN_CONFIG", payload: patch });
+    },
+    [dispatch],
+  );
 
-  const holdDecrement = useHoldRepeat(() => setConfig({ iterations: Math.max(1, cfg.iterations - 1) }));
-  const holdIncrement = useHoldRepeat(() => setConfig({ iterations: cfg.iterations + 1 }));
+  const holdDecrement = useHoldRepeat(() =>
+    setConfig({ iterations: Math.max(1, cfg.iterations - 1) }),
+  );
+  const holdIncrement = useHoldRepeat(() =>
+    setConfig({ iterations: cfg.iterations + 1 }),
+  );
 
   async function handleSaveApiKey() {
     if (!inputKey.trim()) return;
@@ -508,7 +747,6 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
     setDragging("idle");
   }
 
-
   // Keep iterations in sync with the selected row count, but only when the
   // user actively changes the row selection — not on initial load or re-run restore.
   useEffect(() => {
@@ -521,7 +759,8 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       dataRowUserChangedRef.current = false;
       return;
     }
-    const selectedCount = cfg.dataRowIndices === null ? dataRowTotal : cfg.dataRowIndices.length;
+    const selectedCount =
+      cfg.dataRowIndices === null ? dataRowTotal : cfg.dataRowIndices.length;
     // dataRowTotal may still be 0 when the file just changed but hasn't loaded yet.
     // Keep the flag set so we retry once the total arrives.
     if (selectedCount === 0) return;
@@ -556,7 +795,10 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   }, [cfg.dataFile, dataPreviewCollapsed]);
 
   async function pickDataFile() {
-    const path = await open({ title: "Select Data File", filters: [{ name: "Data", extensions: ["csv", "json"] }] });
+    const path = await open({
+      title: "Select Data File",
+      filters: [{ name: "Data", extensions: ["csv", "json"] }],
+    });
     // Reset the row selection so the new file starts with all rows selected,
     // and re-open the preview so the freshly picked rows are visible.
     if (typeof path === "string") {
@@ -568,7 +810,10 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   }
 
   async function pickEnvFile() {
-    const path = await open({ title: "Select Environment File", filters: [{ name: "Environment", extensions: ["json"] }] });
+    const path = await open({
+      title: "Select Environment File",
+      filters: [{ name: "Environment", extensions: ["json"] }],
+    });
     if (typeof path === "string") setConfig({ envFile: path });
   }
 
@@ -576,9 +821,13 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
   const sourceLabel = state.selectedLocalCollection
     ? state.selectedLocalCollection.name
     : activeKey
-    ? activeKey.label
-    : "—";
-  const sourceType = state.selectedLocalCollection ? t("local") : activeKey ? "API" : null;
+      ? activeKey.label
+      : "—";
+  const sourceType = state.selectedLocalCollection
+    ? t("local")
+    : activeKey
+      ? "API"
+      : null;
 
   const collectionCount = state.collections.length;
 
@@ -589,12 +838,16 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
           <div className="drawer-header">
             <div className="drawer-header-top">
               <span className="drawer-label">{t("newRunLabel")}</span>
-              <button className="drawer-close" onClick={onClose}><X size={14} /></button>
+              <button className="drawer-close" onClick={onClose}>
+                <X size={14} />
+              </button>
             </div>
             <h2 className="drawer-title">{t("configuration")}</h2>
           </div>
           <div className="drawer-body">
-            <div className="drawer-empty" style={{ padding: 20 }}>Legacy drawer — use fullPage mode.</div>
+            <div className="drawer-empty" style={{ padding: 20 }}>
+              Legacy drawer — use fullPage mode.
+            </div>
           </div>
         </div>
       </div>
@@ -609,7 +862,9 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
           <span className="drawer-label">{t("newRunLabel")}</span>
           <h2 className="drawer-title">{t("configuration")}</h2>
         </div>
-        <button className="drawer-close" onClick={onClose}><X size={14} /></button>
+        <button className="drawer-close" onClick={onClose}>
+          <X size={14} />
+        </button>
       </div>
 
       {/* Breadcrumb bar */}
@@ -618,35 +873,53 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
         <BreadcrumbChip
           label={t("source")}
           value={sourceLabel}
-          valueClass={sourceType === "API" ? "bc-chip-value--api" : sourceType ? "bc-chip-value--local" : undefined}
+          valueClass={
+            sourceType === "API"
+              ? "bc-chip-value--api"
+              : sourceType
+                ? "bc-chip-value--local"
+                : undefined
+          }
           open={openDropdown === "source"}
-          onToggle={() => setOpenDropdown(openDropdown === "source" ? null : "source")}
+          onToggle={() =>
+            setOpenDropdown(openDropdown === "source" ? null : "source")
+          }
           onClose={() => setOpenDropdown(null)}
-          action={activeKey && !state.selectedLocalCollection ? (
-            <button
-              className={`bc-chip-sync-btn${syncStatus === "error" ? " bc-chip-sync-btn--error" : ""}`}
-              title={
-                syncStatus === "error" && state.lastSyncError
-                  ? t("syncErrorTitle", { error: state.lastSyncError })
-                  : snapshots?.[activeKey.id]
-                    ? t("syncTitleLast", { date: new Date(snapshots[activeKey.id]!.synced_at * 1000).toLocaleString() })
-                    : t("syncTitleNever")
-              }
-              onClick={() => void handleRefresh()}
-              disabled={syncStatus === "syncing"}
-            >
-              {syncStatus === "syncing" ? (
-                <span className="bc-refresh-spinner" />
-              ) : syncStatus === "error" ? (
-                <AlertCircle size={11} />
-              ) : (
-                <RefreshCw size={11} />
-              )}
-            </button>
-          ) : undefined}
+          action={
+            activeKey && !state.selectedLocalCollection ? (
+              <button
+                className={`bc-chip-sync-btn${syncStatus === "error" ? " bc-chip-sync-btn--error" : ""}`}
+                title={
+                  syncStatus === "error" && state.lastSyncError
+                    ? t("syncErrorTitle", { error: state.lastSyncError })
+                    : snapshots?.[activeKey.id]
+                      ? t("syncTitleLast", {
+                          date: new Date(
+                            snapshots[activeKey.id]!.synced_at * 1000,
+                          ).toLocaleString(),
+                        })
+                      : t("syncTitleNever")
+                }
+                onClick={() => void handleRefresh()}
+                disabled={syncStatus === "syncing"}
+              >
+                {syncStatus === "syncing" ? (
+                  <span className="bc-refresh-spinner" />
+                ) : syncStatus === "error" ? (
+                  <AlertCircle size={11} />
+                ) : (
+                  <RefreshCw size={11} />
+                )}
+              </button>
+            ) : undefined
+          }
         >
           <div className="bc-dropdown-section">
-            <div className="bc-dropdown-header">{t("sources", { count: state.apiKeys.length + state.localCollections.length })}</div>
+            <div className="bc-dropdown-header">
+              {t("sources", {
+                count: state.apiKeys.length + state.localCollections.length,
+              })}
+            </div>
             {state.apiKeys.map((k) => (
               <div
                 key={k.id}
@@ -658,9 +931,18 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                   if (snap && snap.workspaces.length > 0) {
                     const wsData = snap.workspaces.map((s) => s.workspace);
                     dispatch({ type: "SET_WORKSPACES", payload: wsData });
-                    dispatch({ type: "SELECT_WORKSPACE", payload: wsData[0].id });
-                    dispatch({ type: "SET_COLLECTIONS", payload: snap.workspaces[0].collections });
-                    dispatch({ type: "SET_ENVIRONMENTS", payload: snap.workspaces[0].environments });
+                    dispatch({
+                      type: "SELECT_WORKSPACE",
+                      payload: wsData[0].id,
+                    });
+                    dispatch({
+                      type: "SET_COLLECTIONS",
+                      payload: snap.workspaces[0].collections,
+                    });
+                    dispatch({
+                      type: "SET_ENVIRONMENTS",
+                      payload: snap.workspaces[0].environments,
+                    });
                   } else {
                     dispatch({ type: "SET_WORKSPACES", payload: [] });
                     dispatch({ type: "SET_COLLECTIONS", payload: [] });
@@ -669,7 +951,11 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                   setOpenDropdown(null);
                 }}
               >
-                <span className={`bc-dropdown-name${k.id === state.activeApiKeyId && !state.selectedLocalCollection ? " bc-dropdown-name--api-active" : ""}`}>{k.label}</span>
+                <span
+                  className={`bc-dropdown-name${k.id === state.activeApiKeyId && !state.selectedLocalCollection ? " bc-dropdown-name--api-active" : ""}`}
+                >
+                  {k.label}
+                </span>
                 <span className="source-chip source-chip--api">API</span>
               </div>
             ))}
@@ -682,17 +968,53 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                   setOpenDropdown(null);
                 }}
               >
-                <span className={`bc-dropdown-name${state.selectedLocalCollection?.id === col.id ? " bc-dropdown-name--local-active" : ""}`}>{col.name}</span>
-                <span className="source-chip source-chip--local">{t("local")}</span>
+                <span
+                  className={`bc-dropdown-name${state.selectedLocalCollection?.id === col.id ? " bc-dropdown-name--local-active" : ""}`}
+                >
+                  {col.name}
+                </span>
+                <span className="source-chip source-chip--local">
+                  {t("local")}
+                </span>
               </div>
             ))}
-            {(state.apiKeys.length > 0 || state.localCollections.length > 0) && (
-              <div className="bc-dropdown-manage" onClick={() => { setOpenDropdown(null); setShowManageDialog(true); }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            {(state.apiKeys.length > 0 ||
+              state.localCollections.length > 0) && (
+              <div
+                className="bc-dropdown-manage"
+                onClick={() => {
+                  setOpenDropdown(null);
+                  setShowManageDialog(true);
+                }}
+              >
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ flexShrink: 0 }}
+                >
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
                 {t("manageSources")}
               </div>
             )}
-            <div className="bc-dropdown-add" onClick={() => { setOpenDropdown(null); setShowAddPopup(true); }} style={{ display: "flex", alignItems: "center", gap: "6px" }}><Plus size={13} style={{ flexShrink: 0 }} />{t("addSource")}</div>
+            <div
+              className="bc-dropdown-add"
+              onClick={() => {
+                setOpenDropdown(null);
+                setShowAddPopup(true);
+              }}
+              style={{ display: "flex", alignItems: "center", gap: "6px" }}
+            >
+              <Plus size={13} style={{ flexShrink: 0 }} />
+              {t("addSource")}
+            </div>
           </div>
         </BreadcrumbChip>
 
@@ -705,12 +1027,18 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
               label={t("workspace")}
               value={selectedWorkspace?.name ?? "—"}
               open={openDropdown === "workspace"}
-              onToggle={() => setOpenDropdown(openDropdown === "workspace" ? null : "workspace")}
+              onToggle={() =>
+                setOpenDropdown(
+                  openDropdown === "workspace" ? null : "workspace",
+                )
+              }
               onClose={() => setOpenDropdown(null)}
               disabled={!activeKey}
             >
               <div className="bc-dropdown-section">
-                <div className="bc-dropdown-header">{t("workspaces", { count: state.workspaces.length })}</div>
+                <div className="bc-dropdown-header">
+                  {t("workspaces", { count: state.workspaces.length })}
+                </div>
                 {state.workspaces.map((ws) => (
                   <div
                     key={ws.id}
@@ -719,18 +1047,32 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                       dispatch({ type: "SELECT_WORKSPACE", payload: ws.id });
                       const snap = activeKey ? snapshots?.[activeKey.id] : null;
                       if (snap) {
-                        const wsSnap = snap.workspaces.find((s) => s.workspace.id === ws.id);
+                        const wsSnap = snap.workspaces.find(
+                          (s) => s.workspace.id === ws.id,
+                        );
                         if (wsSnap) {
-                          dispatch({ type: "SET_COLLECTIONS", payload: wsSnap.collections });
-                          dispatch({ type: "SET_ENVIRONMENTS", payload: wsSnap.environments });
+                          dispatch({
+                            type: "SET_COLLECTIONS",
+                            payload: wsSnap.collections,
+                          });
+                          dispatch({
+                            type: "SET_ENVIRONMENTS",
+                            payload: wsSnap.environments,
+                          });
                         }
                       }
                       setOpenDropdown(null);
                     }}
                   >
                     <span className="bc-dropdown-name">{ws.name}</span>
-                    <span className="bc-dropdown-count">{ws.workspace_type ?? ""}</span>
-                    {state.selectedWorkspace === ws.id && <span className="bc-check"><Check size={12} /></span>}
+                    <span className="bc-dropdown-count">
+                      {ws.workspace_type ?? ""}
+                    </span>
+                    {state.selectedWorkspace === ws.id && (
+                      <span className="bc-check">
+                        <Check size={12} />
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -745,12 +1087,18 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
               badge={collectionCount > 0 ? String(collectionCount) : undefined}
               badgeClass="bc-count-badge"
               open={openDropdown === "collection"}
-              onToggle={() => setOpenDropdown(openDropdown === "collection" ? null : "collection")}
+              onToggle={() =>
+                setOpenDropdown(
+                  openDropdown === "collection" ? null : "collection",
+                )
+              }
               onClose={() => setOpenDropdown(null)}
               disabled={!activeKey}
             >
               <div className="bc-dropdown-section">
-                <div className="bc-dropdown-header">{t("collections", { count: collectionCount })}</div>
+                <div className="bc-dropdown-header">
+                  {t("collections", { count: collectionCount })}
+                </div>
                 {state.collections.map((col) => (
                   <div
                     key={col.uid}
@@ -761,11 +1109,17 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                     }}
                   >
                     <span className="bc-dropdown-name">{col.name}</span>
-                    {state.selectedCollection?.uid === col.uid && <span className="bc-check"><Check size={12} /></span>}
+                    {state.selectedCollection?.uid === col.uid && (
+                      <span className="bc-check">
+                        <Check size={12} />
+                      </span>
+                    )}
                   </div>
                 ))}
                 {state.collections.length === 0 && (
-                  <div className="bc-dropdown-loading">{t("noCollections")}</div>
+                  <div className="bc-dropdown-loading">
+                    {t("noCollections")}
+                  </div>
                 )}
               </div>
             </BreadcrumbChip>
@@ -787,7 +1141,9 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                 onChange={handleToggleAllRequests}
                 title={allRequestsSelected ? t("deselectAll") : t("selectAll")}
               />
-              <span className="config-tree-title">{t("foldersAndRequests")}</span>
+              <span className="config-tree-title">
+                {t("foldersAndRequests")}
+              </span>
             </label>
             <button
               className="config-tree-collapse-btn"
@@ -805,15 +1161,23 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
-          {foldersLoading && <div className="drawer-spinner" style={{ padding: "12px 20px" }}>{t("loading")}</div>}
+          {foldersLoading && (
+            <div className="drawer-spinner" style={{ padding: "12px 20px" }}>
+              {t("loading")}
+            </div>
+          )}
           {!foldersLoading && folderItems.length === 0 && (
             <div className="config-tree-empty">
               {canRun ? t("noFolders") : t("selectCollectionFirst")}
             </div>
           )}
-          {!foldersLoading && folderItems.length > 0 && visibleItems.length === 0 && (
-            <div className="config-tree-empty">{t("noResults", { query: searchQuery })}</div>
-          )}
+          {!foldersLoading &&
+            folderItems.length > 0 &&
+            visibleItems.length === 0 && (
+              <div className="config-tree-empty">
+                {t("noResults", { query: searchQuery })}
+              </div>
+            )}
           {!foldersLoading && visibleItems.length > 0 && (
             <div className="config-tree-body">
               {visibleItems.map((item) => (
@@ -842,7 +1206,10 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
             e.preventDefault();
           }}
         />
-        <div className="config-page-right" style={{ width: rightPanelWidth, minWidth: rightPanelWidth }}>
+        <div
+          className="config-page-right"
+          style={{ width: rightPanelWidth, minWidth: rightPanelWidth }}
+        >
           {renderSummaryPanel()}
         </div>
       </div>
@@ -852,7 +1219,11 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
           <DataFilePreview
             path={cfg.dataFile}
             selected={cfg.dataRowIndices}
-            onChange={(next) => { dataRowUserChangedRef.current = true; dataRowUserChangedFileRef.current = cfg.dataFile; setConfig({ dataRowIndices: next }); }}
+            onChange={(next) => {
+              dataRowUserChangedRef.current = true;
+              dataRowUserChangedFileRef.current = cfg.dataFile;
+              setConfig({ dataRowIndices: next });
+            }}
             onCollapse={() => setDataPreviewCollapsed(true)}
             onTotalChange={setDataRowTotal}
             onColumnsChange={setDataColumnCount}
@@ -861,9 +1232,18 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       )}
 
       <div className="drawer-footer config-page-footer">
-        <button className="btn" onClick={onClose}>{t("cancel")}</button>
-        <button className="btn btn--primary btn--run" onClick={onRun} disabled={!runEnabled}>
-          <Play size={13} /> {state.selectedLocalCollection ? t("run") : t("runButton", { name: selectedName })}
+        <button className="btn" onClick={onClose}>
+          {t("cancel")}
+        </button>
+        <button
+          className="btn btn--primary btn--run"
+          onClick={onRun}
+          disabled={!runEnabled}
+        >
+          <Play size={13} />{" "}
+          {state.selectedLocalCollection
+            ? t("run")
+            : t("runButton", { name: selectedName })}
         </button>
       </div>
 
@@ -881,16 +1261,40 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
       )}
 
       {showAddPopup && (
-        <div className="popup-overlay" onMouseDown={() => { setShowAddPopup(false); setPendingLocalFile(null); setInputLocalName(""); }}>
-          <div className="popup" ref={popupRef} onMouseDown={(e) => e.stopPropagation()}>
+        <div
+          className="popup-overlay"
+          onMouseDown={() => {
+            setShowAddPopup(false);
+            setPendingLocalFile(null);
+            setInputLocalName("");
+          }}
+        >
+          <div
+            className="popup"
+            ref={popupRef}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <div className="popup-header">
               <span className="popup-title">{t("addSourceTitle")}</span>
-              <button className="popup-close" onClick={() => { setShowAddPopup(false); setPendingLocalFile(null); setInputLocalName(""); }}><X size={14} /></button>
+              <button
+                className="popup-close"
+                onClick={() => {
+                  setShowAddPopup(false);
+                  setPendingLocalFile(null);
+                  setInputLocalName("");
+                }}
+              >
+                <X size={14} />
+              </button>
             </div>
             <div className="popup-tabs">
               <button
                 className={`popup-tab ${popupTab === "apikey" ? "popup-tab--active" : ""}`}
-                onClick={() => { setPopupTab("apikey"); setPendingLocalFile(null); setInputLocalName(""); }}
+                onClick={() => {
+                  setPopupTab("apikey");
+                  setPendingLocalFile(null);
+                  setInputLocalName("");
+                }}
               >
                 <Key size={13} /> {t("apiKeyTab")}
               </button>
@@ -919,7 +1323,9 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                     placeholder="PMAK-..."
                     value={inputKey}
                     onChange={(e) => setInputKey(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") void handleSaveApiKey(); }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleSaveApiKey();
+                    }}
                   />
                   <button
                     className="btn btn--primary"
@@ -936,22 +1342,35 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                 {!pendingLocalFile ? (
                   <div
                     className={`drop-zone ${dragging === "valid" ? "drop-zone--active" : dragging === "invalid" ? "drop-zone--invalid" : ""}`}
-                    onDragEnter={(e) => { e.preventDefault(); dragCounter.current++; }}
-                    onDragLeave={(e) => { e.preventDefault(); dragCounter.current--; if (dragCounter.current === 0) setDragging("idle"); }}
+                    onDragEnter={(e) => {
+                      e.preventDefault();
+                      dragCounter.current++;
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      dragCounter.current--;
+                      if (dragCounter.current === 0) setDragging("idle");
+                    }}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={handleDropPopup}
                     onClick={() => void handleImportCollection()}
                   >
-                    <span className="drop-zone-icon"><FolderOpen size={32} /></span>
+                    <span className="drop-zone-icon">
+                      <FolderOpen size={32} />
+                    </span>
                     <span className="drop-zone-text">
-                      {dragging !== "idle" ? t("dropRelease") : t("dropOrClickShort")}
+                      {dragging !== "idle"
+                        ? t("dropRelease")
+                        : t("dropOrClickShort")}
                     </span>
                   </div>
                 ) : (
                   <div className="field-col">
                     <div className="local-file-selected">
                       <FileText size={14} />
-                      <span className="local-file-selected-name">{pendingLocalFile.path.split(/[\\/]/).pop()}</span>
+                      <span className="local-file-selected-name">
+                        {pendingLocalFile.path.split(/[\\/]/).pop()}
+                      </span>
                     </div>
                     <input
                       className="input"
@@ -960,14 +1379,30 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                       value={inputLocalName}
                       onChange={(e) => setInputLocalName(e.target.value)}
                       autoFocus
-                      onKeyDown={(e) => { if (e.key === "Enter") void confirmImportCollection(); }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void confirmImportCollection();
+                      }}
                     />
                     <div className="popup-actions-row">
-                      <button className="btn" onClick={() => { setPendingLocalFile(null); setInputLocalName(""); }} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setPendingLocalFile(null);
+                          setInputLocalName("");
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                        }}
+                      >
                         <ArrowLeft size={14} />
                         {t("back")}
                       </button>
-                      <button className="btn btn--primary" onClick={() => void confirmImportCollection()}>
+                      <button
+                        className="btn btn--primary"
+                        onClick={() => void confirmImportCollection()}
+                      >
                         {t("add")}
                       </button>
                     </div>
@@ -992,7 +1427,7 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                 <div className="data-file-card-icon-wrap">
                   <FileText size={24} />
                   <span className="data-file-card-ext">
-                    {cfg.dataFile.split('.').pop()?.toUpperCase() ?? "FILE"}
+                    {cfg.dataFile.split(".").pop()?.toUpperCase() ?? "FILE"}
                   </span>
                 </div>
                 <div className="data-file-card-info">
@@ -1004,30 +1439,47 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
                     {cfg.dataFile.split(/[\\/]/).pop()}
                   </button>
                   <div className="data-file-card-status">
-                    {t("dataFileReady", { count: cfg.dataRowIndices === null ? dataRowTotal : cfg.dataRowIndices.length })}
+                    {t("dataFileReady", {
+                      count:
+                        cfg.dataRowIndices === null
+                          ? dataRowTotal
+                          : cfg.dataRowIndices.length,
+                    })}
                   </div>
                 </div>
                 <button
                   className="data-file-card-remove"
-                  onClick={() => setConfig({ dataFile: null, dataRowIndices: null })}
+                  onClick={() =>
+                    setConfig({ dataFile: null, dataRowIndices: null })
+                  }
                 >
                   <X size={14} />
                 </button>
               </div>
               <div className="data-file-card-stats">
                 <div className="data-file-stat">
-                  <span className="data-file-stat-value">{dataColumnCount}</span>
-                  <span className="data-file-stat-label">{t("dataFileColumns")}</span>
+                  <span className="data-file-stat-value">
+                    {dataColumnCount}
+                  </span>
+                  <span className="data-file-stat-label">
+                    {t("dataFileColumns")}
+                  </span>
                 </div>
                 <div className="data-file-stat">
                   <span className="data-file-stat-value">{dataRowTotal}</span>
-                  <span className="data-file-stat-label">{t("dataFileRows")}</span>
+                  <span className="data-file-stat-label">
+                    {t("dataFileRows")}
+                  </span>
                 </div>
                 <div className="data-file-stat">
                   <span className="data-file-stat-value">
-                    {cfg.dataRowIndices === null ? dataRowTotal : cfg.dataRowIndices.length}
+                    {cfg.dataRowIndices === null
+                      ? dataRowTotal
+                      : cfg.dataRowIndices.length}
                   </span>
-                  <span className="data-file-stat-label">{t("dataFileSelected")}</span>
+                  <span className="data-file-stat-label">
+                    {t("dataFileSelected")}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1041,7 +1493,9 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
               onDrop={(e) => e.preventDefault()}
               style={{ cursor: "pointer" }}
             >
-              <div className="data-file-dropzone-icon"><Upload size={28} /></div>
+              <div className="data-file-dropzone-icon">
+                <Upload size={28} />
+              </div>
               <div className="data-file-dropzone-text">{t("dataFileDrop")}</div>
               <div className="data-file-dropzone-sub">
                 {t("dataFileOr")}{" "}
@@ -1064,90 +1518,142 @@ export function RunConfigDrawer({ state, dispatch, onRun, onClose, api, fullPage
               <button
                 className={`env-mode-btn${envMode === "postman" ? " env-mode-btn--active" : ""}`}
                 onClick={() => setEnvMode("postman")}
-              >{t("postman")}</button>
+              >
+                {t("postman")}
+              </button>
               <button
                 className={`env-mode-btn${envMode === "local" ? " env-mode-btn--active" : ""}`}
                 onClick={() => setEnvMode("local")}
-              >{t("localFile")}</button>
+              >
+                {t("localFile")}
+              </button>
             </div>
           </div>
           {envMode === "postman" && (
             <div className="env-postman-wrap" ref={envDropdownRef}>
               <button
-                className={`env-postman-chip${openDropdown === "environment" ? " env-postman-chip--open" : ""}${!!state.selectedLocalCollection || state.environments.length === 0 ? " env-postman-chip--disabled" : ""}`}
+                className={`env-postman-chip${openDropdown === "environment" ? " env-postman-chip--open" : ""}${state.selectedLocalCollection || state.environments.length === 0 ? " env-postman-chip--disabled" : ""}`}
                 onClick={() => {
-                  if (state.selectedLocalCollection || state.environments.length === 0) return;
-                  setOpenDropdown(openDropdown === "environment" ? null : "environment");
+                  if (
+                    state.selectedLocalCollection ||
+                    state.environments.length === 0
+                  )
+                    return;
+                  setOpenDropdown(
+                    openDropdown === "environment" ? null : "environment",
+                  );
                 }}
               >
-                <span className={`env-postman-dot${state.selectedEnvironmentUid ? " env-postman-dot--active" : ""}`} />
+                <span
+                  className={`env-postman-dot${state.selectedEnvironmentUid ? " env-postman-dot--active" : ""}`}
+                />
                 <span className="env-postman-name">
-                  {state.environments.find(e => e.uid === state.selectedEnvironmentUid)?.name ?? t("noEnvironment")}
+                  {state.environments.find(
+                    (e) => e.uid === state.selectedEnvironmentUid,
+                  )?.name ?? t("noEnvironment")}
                 </span>
                 <ChevronDown size={14} className="env-postman-chevron" />
               </button>
               {openDropdown === "environment" && (
                 <div className="bc-dropdown">
                   <div className="bc-dropdown-section">
-                    <div className="bc-dropdown-header">{t("environments", { count: state.environments.length })}</div>
+                    <div className="bc-dropdown-header">
+                      {t("environments", { count: state.environments.length })}
+                    </div>
                     <div
                       className={`bc-dropdown-item ${state.selectedEnvironmentUid === null ? "bc-dropdown-item--active" : ""}`}
-                      onClick={() => { dispatch({ type: "SELECT_ENVIRONMENT", payload: null }); setOpenDropdown(null); }}
+                      onClick={() => {
+                        dispatch({ type: "SELECT_ENVIRONMENT", payload: null });
+                        setOpenDropdown(null);
+                      }}
                     >
-                      <span className="bc-dropdown-name">{t("noEnvironment")}</span>
-                      {state.selectedEnvironmentUid === null && <span className="bc-check"><Check size={12} /></span>}
+                      <span className="bc-dropdown-name">
+                        {t("noEnvironment")}
+                      </span>
+                      {state.selectedEnvironmentUid === null && (
+                        <span className="bc-check">
+                          <Check size={12} />
+                        </span>
+                      )}
                     </div>
                     {state.environments.map((env) => (
                       <div
                         key={env.uid}
                         className={`bc-dropdown-item ${state.selectedEnvironmentUid === env.uid ? "bc-dropdown-item--active" : ""}`}
-                        onClick={() => { dispatch({ type: "SELECT_ENVIRONMENT", payload: env.uid }); setConfig({ envFile: null }); setOpenDropdown(null); }}
+                        onClick={() => {
+                          dispatch({
+                            type: "SELECT_ENVIRONMENT",
+                            payload: env.uid,
+                          });
+                          setConfig({ envFile: null });
+                          setOpenDropdown(null);
+                        }}
                       >
                         <span className="bc-dropdown-name">{env.name}</span>
-                        {state.selectedEnvironmentUid === env.uid && <span className="bc-check"><Check size={12} /></span>}
+                        {state.selectedEnvironmentUid === env.uid && (
+                          <span className="bc-check">
+                            <Check size={12} />
+                          </span>
+                        )}
                       </div>
                     ))}
                     {state.environments.length === 0 && (
-                      <div className="bc-dropdown-loading">{t("noEnvironments")}</div>
+                      <div className="bc-dropdown-loading">
+                        {t("noEnvironments")}
+                      </div>
                     )}
                   </div>
                 </div>
               )}
             </div>
           )}
-          {envMode === "local" && (
-            cfg.envFile ? (
+          {envMode === "local" &&
+            (cfg.envFile ? (
               <div className="env-local-card">
                 <div className="data-file-card-icon-wrap">
                   <Globe size={22} />
                   <span className="data-file-card-ext">ENV</span>
                 </div>
                 <div className="env-local-card-info">
-                  <div className="env-local-card-name">{cfg.envFile.split(/[\\/]/).pop()}</div>
-                  <div className="env-local-card-status">{t("envLocalActive")}</div>
+                  <div className="env-local-card-name">
+                    {cfg.envFile.split(/[\\/]/).pop()}
+                  </div>
+                  <div className="env-local-card-status">
+                    {t("envLocalActive")}
+                  </div>
                 </div>
-                <button className="data-file-card-remove" onClick={() => setConfig({ envFile: null })}>
+                <button
+                  className="data-file-card-remove"
+                  onClick={() => setConfig({ envFile: null })}
+                >
                   <X size={14} />
                 </button>
               </div>
             ) : (
-              <button className="env-local-pick-btn" onClick={() => void pickEnvFile()}>
+              <button
+                className="env-local-pick-btn"
+                onClick={() => void pickEnvFile()}
+              >
                 <Folder size={18} />
                 {t("localFile")}
               </button>
-            )
-          )}
+            ))}
         </div>
 
         <div className="config-summary-section">
           <div className="config-summary-label">{t("iterations")}</div>
           <div className="iter-control" style={{ marginTop: 4 }}>
-            <button className="iter-btn" {...holdDecrement}>−</button>
-            <span className="iter-value" key={cfg.iterations}>{cfg.iterations}</span>
-            <button className="iter-btn" {...holdIncrement}>+</button>
+            <button className="iter-btn" {...holdDecrement}>
+              −
+            </button>
+            <span className="iter-value" key={cfg.iterations}>
+              {cfg.iterations}
+            </span>
+            <button className="iter-btn" {...holdIncrement}>
+              +
+            </button>
           </div>
         </div>
-
       </div>
     );
   }
@@ -1165,7 +1671,16 @@ interface ManageSourcesDialogProps {
   setRenameValue: (v: string) => void;
 }
 
-function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, setRenamingColId, renameValue, setRenameValue }: ManageSourcesDialogProps) {
+function ManageSourcesDialog({
+  state,
+  dispatch,
+  api,
+  onClose,
+  renamingColId,
+  setRenamingColId,
+  renameValue,
+  setRenameValue,
+}: ManageSourcesDialogProps) {
   const { t } = useTranslation();
   const [renamingKeyId, setRenamingKeyId] = useState<string | null>(null);
   const [renameKeyValue, setRenameKeyValue] = useState("");
@@ -1174,8 +1689,14 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.stopPropagation();
-        if (renamingKeyId) { setRenamingKeyId(null); return; }
-        if (renamingColId) { setRenamingColId(null); return; }
+        if (renamingKeyId) {
+          setRenamingKeyId(null);
+          return;
+        }
+        if (renamingColId) {
+          setRenamingColId(null);
+          return;
+        }
         onClose();
       }
     }
@@ -1184,7 +1705,10 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
   }, [onClose, renamingKeyId, renamingColId, setRenamingColId]);
 
   async function handleDeleteApiKey(k: ApiKeyEntry) {
-    const ok = await confirm(t("removeSourceConfirm", { name: k.label }), { title: t("removeSourceTitle"), kind: "warning" });
+    const ok = await confirm(t("removeSourceConfirm", { name: k.label }), {
+      title: t("removeSourceTitle"),
+      kind: "warning",
+    });
     if (!ok) return;
     await api.deleteApiKey(k.id);
     dispatch({ type: "REMOVE_API_KEY", payload: k.id });
@@ -1198,7 +1722,10 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
   }
 
   async function handleDeleteLocalCol(col: LocalCollection) {
-    const ok = await confirm(t("removeSourceConfirm", { name: col.name }), { title: t("removeSourceTitle"), kind: "warning" });
+    const ok = await confirm(t("removeSourceConfirm", { name: col.name }), {
+      title: t("removeSourceTitle"),
+      kind: "warning",
+    });
     if (!ok) return;
     await api.deleteLocalCollection(col.id);
     dispatch({ type: "REMOVE_LOCAL_COLLECTION", payload: col.id });
@@ -1207,16 +1734,24 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
   async function handleSaveColRename(col: LocalCollection) {
     const name = renameValue.trim() || col.name;
     await api.saveLocalCollection(col.id, name, col.path);
-    dispatch({ type: "RENAME_LOCAL_COLLECTION", payload: { id: col.id, name } });
+    dispatch({
+      type: "RENAME_LOCAL_COLLECTION",
+      payload: { id: col.id, name },
+    });
     setRenamingColId(null);
   }
 
   return (
     <div className="popup-overlay" onMouseDown={onClose}>
-      <div className="popup manage-sources-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        className="popup manage-sources-dialog"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="popup-header">
           <span className="popup-title">{t("manageSourcesTitle")}</span>
-          <button className="popup-close" onClick={onClose}><X size={14} /></button>
+          <button className="popup-close" onClick={onClose}>
+            <X size={14} />
+          </button>
         </div>
         <div className="popup-body manage-sources-body">
           {state.apiKeys.map((k) => (
@@ -1234,8 +1769,18 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
                       else if (e.key === "Escape") setRenamingKeyId(null);
                     }}
                   />
-                  <button className="bc-rename-confirm" onClick={() => void handleSaveKeyRename(k)}><Check size={15} /></button>
-                  <button className="bc-rename-cancel" onClick={() => setRenamingKeyId(null)}><X size={15} /></button>
+                  <button
+                    className="bc-rename-confirm"
+                    onClick={() => void handleSaveKeyRename(k)}
+                  >
+                    <Check size={15} />
+                  </button>
+                  <button
+                    className="bc-rename-cancel"
+                    onClick={() => setRenamingKeyId(null)}
+                  >
+                    <X size={15} />
+                  </button>
                 </>
               ) : (
                 <>
@@ -1243,20 +1788,41 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
                   <button
                     className="manage-source-btn"
                     title={t("renameSource")}
-                    onClick={() => { setRenamingKeyId(k.id); setRenameKeyValue(k.label); }}
-                  ><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+                    onClick={() => {
+                      setRenamingKeyId(k.id);
+                      setRenameKeyValue(k.label);
+                    }}
+                  >
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                    </svg>
+                  </button>
                   <button
                     className="manage-source-btn manage-source-btn--delete"
                     title={t("removeSource")}
                     onClick={() => void handleDeleteApiKey(k)}
-                  ><X size={15} /></button>
+                  >
+                    <X size={15} />
+                  </button>
                 </>
               )}
             </div>
           ))}
           {state.localCollections.map((col) => (
             <div key={col.id} className="manage-source-row">
-              <span className="source-chip source-chip--local">{t("local")}</span>
+              <span className="source-chip source-chip--local">
+                {t("local")}
+              </span>
               {renamingColId === col.id ? (
                 <>
                   <input
@@ -1269,8 +1835,18 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
                       else if (e.key === "Escape") setRenamingColId(null);
                     }}
                   />
-                  <button className="bc-rename-confirm" onClick={() => void handleSaveColRename(col)}><Check size={15} /></button>
-                  <button className="bc-rename-cancel" onClick={() => setRenamingColId(null)}><X size={15} /></button>
+                  <button
+                    className="bc-rename-confirm"
+                    onClick={() => void handleSaveColRename(col)}
+                  >
+                    <Check size={15} />
+                  </button>
+                  <button
+                    className="bc-rename-cancel"
+                    onClick={() => setRenamingColId(null)}
+                  >
+                    <X size={15} />
+                  </button>
                 </>
               ) : (
                 <>
@@ -1278,20 +1854,42 @@ function ManageSourcesDialog({ state, dispatch, api, onClose, renamingColId, set
                   <button
                     className="manage-source-btn"
                     title={t("renameSource")}
-                    onClick={() => { setRenamingColId(col.id); setRenameValue(col.name); }}
-                  ><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+                    onClick={() => {
+                      setRenamingColId(col.id);
+                      setRenameValue(col.name);
+                    }}
+                  >
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                    </svg>
+                  </button>
                   <button
                     className="manage-source-btn manage-source-btn--delete"
                     title={t("removeSource")}
                     onClick={() => void handleDeleteLocalCol(col)}
-                  ><X size={15} /></button>
+                  >
+                    <X size={15} />
+                  </button>
                 </>
               )}
             </div>
           ))}
-          {state.apiKeys.length === 0 && state.localCollections.length === 0 && (
-            <div className="manage-sources-empty">{t("noSources", "No sources configured.")}</div>
-          )}
+          {state.apiKeys.length === 0 &&
+            state.localCollections.length === 0 && (
+              <div className="manage-sources-empty">
+                {t("noSources", "No sources configured.")}
+              </div>
+            )}
         </div>
       </div>
     </div>
@@ -1309,11 +1907,19 @@ function useHoldRepeat(action: () => void, delay = 350, interval = 80) {
   });
 
   function stop() {
-    if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
   }
 
-  useEffect(() => () => stop(), []);
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
+  useEffect(() => () => stopRef.current(), []);
 
   function start(e: React.MouseEvent) {
     if (e.button !== 0) return;
@@ -1342,7 +1948,19 @@ interface BreadcrumbChipProps {
   children: React.ReactNode;
 }
 
-function BreadcrumbChip({ label, value, valueClass, badge, badgeClass, open, onToggle, onClose, disabled, action, children }: BreadcrumbChipProps) {
+function BreadcrumbChip({
+  label,
+  value,
+  valueClass,
+  badge,
+  badgeClass,
+  open,
+  onToggle,
+  onClose,
+  disabled,
+  action,
+  children,
+}: BreadcrumbChipProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1352,7 +1970,11 @@ function BreadcrumbChip({ label, value, valueClass, badge, badgeClass, open, onT
       downOutside = !!(ref.current && !ref.current.contains(e.target as Node));
     }
     function onUp(e: MouseEvent) {
-      if (downOutside && ref.current && !ref.current.contains(e.target as Node)) {
+      if (
+        downOutside &&
+        ref.current &&
+        !ref.current.contains(e.target as Node)
+      ) {
         onClose();
       }
       downOutside = false;
@@ -1373,31 +1995,43 @@ function BreadcrumbChip({ label, value, valueClass, badge, badgeClass, open, onT
         style={{ cursor: disabled ? "default" : "pointer" }}
       >
         <span className="bc-chip-label">{label}</span>
-        <span className={`bc-chip-value${valueClass ? ` ${valueClass}` : ""}`}>{value}</span>
-        {badge && <span className={`bc-chip-badge ${badgeClass ?? ""}`}>{badge}</span>}
+        <span className={`bc-chip-value${valueClass ? ` ${valueClass}` : ""}`}>
+          {value}
+        </span>
+        {badge && (
+          <span className={`bc-chip-badge ${badgeClass ?? ""}`}>{badge}</span>
+        )}
         {action && (
-          <span
-            className="bc-chip-action"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <span className="bc-chip-action" onClick={(e) => e.stopPropagation()}>
             {action}
           </span>
         )}
-        <span className="bc-chip-arrow"><ChevronDown size={12} /></span>
+        <span className="bc-chip-arrow">
+          <ChevronDown size={12} />
+        </span>
       </div>
-      {open && (
-        <div className="bc-dropdown">
-          {children}
-        </div>
-      )}
+      {open && <div className="bc-dropdown">{children}</div>}
     </div>
   );
 }
 
 /* ── RequestPopover ──────────────────────────────────────────────────────────── */
-interface PopoverPos { top: number; left: number; }
+interface PopoverPos {
+  top: number;
+  left: number;
+}
 
-function RequestPopover({ request, pos, onMouseEnter, onMouseLeave }: { request: CollectionRequest; pos: PopoverPos; onMouseEnter: () => void; onMouseLeave: () => void }) {
+function RequestPopover({
+  request,
+  pos,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  request: CollectionRequest;
+  pos: PopoverPos;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [adjusted, setAdjusted] = useState<PopoverPos>(pos);
 
@@ -1435,12 +2069,14 @@ function RequestPopover({ request, pos, onMouseEnter, onMouseLeave }: { request:
       onMouseLeave={onMouseLeave}
     >
       <div className="request-popover-header">
-        <span className={`tree-method tree-method--${request.method.toLowerCase()}`}>{request.method}</span>
+        <span
+          className={`tree-method tree-method--${request.method.toLowerCase()}`}
+        >
+          {request.method}
+        </span>
         <span className="request-popover-name">{request.name}</span>
       </div>
-      {request.url && (
-        <div className="request-popover-url">{request.url}</div>
-      )}
+      {request.url && <div className="request-popover-url">{request.url}</div>}
       {request.body ? (
         <div className="request-popover-body">
           <div className="request-popover-body-label">{request.body.type}</div>
@@ -1464,12 +2100,29 @@ interface TreeItemProps {
   onToggleFolder: (folder: CollectionFolder) => void;
 }
 
-function TreeItem({ item, depth, expandedIds, onToggleExpand, selectedRequestIds, onToggleRequest, onToggleFolder }: TreeItemProps) {
+function TreeItem({
+  item,
+  depth,
+  expandedIds,
+  onToggleExpand,
+  selectedRequestIds,
+  onToggleRequest,
+  onToggleFolder,
+}: TreeItemProps) {
   const indent = depth * 16;
-  const [popover, setPopover] = useState<{ request: CollectionRequest; pos: PopoverPos } | null>(null);
-  const folderReqIdsForIndeterminate = isFolder(item) ? getFolderRequestIds(item) : [];
-  const checkedCountForIndeterminate = folderReqIdsForIndeterminate.filter((id) => selectedRequestIds.has(id)).length;
-  const indeterminate = checkedCountForIndeterminate > 0 && checkedCountForIndeterminate < folderReqIdsForIndeterminate.length;
+  const [popover, setPopover] = useState<{
+    request: CollectionRequest;
+    pos: PopoverPos;
+  } | null>(null);
+  const folderReqIdsForIndeterminate = isFolder(item)
+    ? getFolderRequestIds(item)
+    : [];
+  const checkedCountForIndeterminate = folderReqIdsForIndeterminate.filter(
+    (id) => selectedRequestIds.has(id),
+  ).length;
+  const indeterminate =
+    checkedCountForIndeterminate > 0 &&
+    checkedCountForIndeterminate < folderReqIdsForIndeterminate.length;
   const checkboxRef = React.useRef<HTMLInputElement>(null);
   React.useEffect(() => {
     if (checkboxRef.current) checkboxRef.current.indeterminate = indeterminate;
@@ -1478,7 +2131,10 @@ function TreeItem({ item, depth, expandedIds, onToggleExpand, selectedRequestIds
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function cancelClose() {
-    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
   }
 
   function scheduleClose() {
@@ -1490,12 +2146,21 @@ function TreeItem({ item, depth, expandedIds, onToggleExpand, selectedRequestIds
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     // anchor: try to place right of the row, collision-detection adjusts in the popover
     const pos = { top: rect.top - 4, left: rect.right + 8 };
-    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
-    hoverTimer.current = setTimeout(() => setPopover({ request: req, pos }), 700);
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+    hoverTimer.current = setTimeout(
+      () => setPopover({ request: req, pos }),
+      700,
+    );
   }
 
   function handleMouseLeave() {
-    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
     scheduleClose();
   }
 
@@ -1511,7 +2176,8 @@ function TreeItem({ item, depth, expandedIds, onToggleExpand, selectedRequestIds
     const expanded = expandedIds.has(item.id);
     const folderReqIds = folderReqIdsForIndeterminate;
     const checkedCount = checkedCountForIndeterminate;
-    const allChecked = folderReqIds.length > 0 && checkedCount === folderReqIds.length;
+    const allChecked =
+      folderReqIds.length > 0 && checkedCount === folderReqIds.length;
 
     return (
       <div>
@@ -1522,7 +2188,10 @@ function TreeItem({ item, depth, expandedIds, onToggleExpand, selectedRequestIds
         >
           <button
             className="tree-expand-btn"
-            onClick={(e) => { e.stopPropagation(); onToggleExpand(item.id, !expanded); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpand(item.id, !expanded);
+            }}
           >
             {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           </button>
@@ -1534,24 +2203,29 @@ function TreeItem({ item, depth, expandedIds, onToggleExpand, selectedRequestIds
             onChange={() => onToggleFolder(item)}
             onClick={(e) => e.stopPropagation()}
           />
-          <span className="tree-folder-icon"><Folder size={14} /></span>
+          <span className="tree-folder-icon">
+            <Folder size={14} />
+          </span>
           <span className="tree-name">{item.name}</span>
           {folderReqIds.length > 0 && (
-            <span className="tree-count">{checkedCount}/{folderReqIds.length}</span>
+            <span className="tree-count">
+              {checkedCount}/{folderReqIds.length}
+            </span>
           )}
         </div>
-        {expanded && item.item.map((child) => (
-          <TreeItem
-            key={child.id}
-            item={child}
-            depth={depth + 1}
-            expandedIds={expandedIds}
-            onToggleExpand={onToggleExpand}
-            selectedRequestIds={selectedRequestIds}
-            onToggleRequest={onToggleRequest}
-            onToggleFolder={onToggleFolder}
-          />
-        ))}
+        {expanded &&
+          item.item.map((child) => (
+            <TreeItem
+              key={child.id}
+              item={child}
+              depth={depth + 1}
+              expandedIds={expandedIds}
+              onToggleExpand={onToggleExpand}
+              selectedRequestIds={selectedRequestIds}
+              onToggleRequest={onToggleRequest}
+              onToggleFolder={onToggleFolder}
+            />
+          ))}
       </div>
     );
   }
@@ -1569,14 +2243,28 @@ function TreeItem({ item, depth, expandedIds, onToggleExpand, selectedRequestIds
           type="checkbox"
           className="tree-checkbox"
           checked={selectedRequestIds.has(item.id)}
+          // biome-ignore lint/suspicious/noEmptyBlockStatements: needed to prevent error
           onChange={() => {}}
-          onClick={(e) => { e.stopPropagation(); onToggleRequest(item.id, e.shiftKey); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleRequest(item.id, e.shiftKey);
+          }}
         />
-        <span className={`tree-method tree-method--${item.method.toLowerCase()}`}>{item.method}</span>
+        <span
+          className={`tree-method tree-method--${item.method.toLowerCase()}`}
+        >
+          {item.method}
+        </span>
         <span className="tree-name">{item.name}</span>
       </div>
-      {popover && <RequestPopover request={popover.request} pos={popover.pos} onMouseEnter={handlePopoverMouseEnter} onMouseLeave={handlePopoverMouseLeave} />}
+      {popover && (
+        <RequestPopover
+          request={popover.request}
+          pos={popover.pos}
+          onMouseEnter={handlePopoverMouseEnter}
+          onMouseLeave={handlePopoverMouseLeave}
+        />
+      )}
     </>
   );
 }
-

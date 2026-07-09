@@ -21,6 +21,7 @@ export interface Collection {
   id: string;
   name: string;
   uid: string;
+  updated_at?: string;
 }
 
 export interface PostmanEnvironment {
@@ -33,6 +34,7 @@ export interface WorkspaceSnapshot {
   workspace: Workspace;
   collections: Collection[];
   environments: PostmanEnvironment[];
+  collection_items?: Record<string, CollectionItem[]>;
 }
 
 export interface SourceSnapshot {

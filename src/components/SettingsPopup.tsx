@@ -14,7 +14,11 @@ interface SettingsPopupProps {
   onClose: () => void;
 }
 
-export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupProps) {
+export function SettingsPopup({
+  theme,
+  onThemeChange,
+  onClose,
+}: SettingsPopupProps) {
   const { t, i18n } = useTranslation();
   const overlayRef = useRef<HTMLDivElement>(null);
   const pillRef = useRef<HTMLSpanElement>(null);
@@ -22,16 +26,22 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
   const langPillRef = useRef<HTMLSpanElement>(null);
   const langBtnRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  const THEME_OPTIONS: { value: ThemeMode; label: string }[] = useMemo(() => [
-    { value: "light", label: t("theme_light") },
-    { value: "dark", label: t("theme_dark") },
-    { value: "system", label: t("theme_system") },
-  ], [t]);
+  const THEME_OPTIONS: { value: ThemeMode; label: string }[] = useMemo(
+    () => [
+      { value: "light", label: t("theme_light") },
+      { value: "dark", label: t("theme_dark") },
+      { value: "system", label: t("theme_system") },
+    ],
+    [t],
+  );
 
-  const LANG_OPTIONS = useMemo(() => [
-    { value: "de", label: t("langGerman") },
-    { value: "en", label: t("langEnglish") },
-  ], [t]);
+  const LANG_OPTIONS = useMemo(
+    () => [
+      { value: "de", label: t("langGerman") },
+      { value: "en", label: t("langEnglish") },
+    ],
+    [t],
+  );
 
   const [version, setVersion] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
@@ -47,7 +57,11 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
   }, [onClose]);
 
   useEffect(() => {
-    getVersion().then(setVersion).catch(() => {});
+    getVersion()
+      .then(setVersion)
+      .catch((e) => {
+        console.error("Failed to get app version:", e);
+      });
   }, []);
 
   useEffect(() => {
@@ -113,7 +127,8 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
         if (event.event === "Started") total = event.data.contentLength ?? 0;
         else if (event.event === "Progress") {
           downloaded += event.data.chunkLength;
-          if (total > 0) setDownloadProgress(Math.round((downloaded / total) * 100));
+          if (total > 0)
+            setDownloadProgress(Math.round((downloaded / total) * 100));
         }
       });
       await relaunch();
@@ -131,10 +146,11 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
     <div
       className={`sp-overlay${isClosing ? " sp-overlay--closing" : ""}`}
       ref={overlayRef}
-      onClick={(e) => { if (e.target === overlayRef.current) handleClose(); }}
+      onClick={(e) => {
+        if (e.target === overlayRef.current) handleClose();
+      }}
     >
       <div className="sp-popup">
-
         {/* Header */}
         <div className="sp-header">
           <span className="sp-title">{t("settings")}</span>
@@ -145,7 +161,6 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
 
         {/* Body */}
         <div className="sp-body">
-
           {/* Theme row */}
           <div className="sp-row">
             <div className="sp-row-left">
@@ -157,7 +172,9 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
               {THEME_OPTIONS.map((opt, i) => (
                 <button
                   key={opt.value}
-                  ref={(el) => { btnRefs.current[i] = el; }}
+                  ref={(el) => {
+                    btnRefs.current[i] = el;
+                  }}
                   className={`sp-seg-btn${theme === opt.value ? " sp-seg-btn--active" : ""}`}
                   onClick={() => onThemeChange(opt.value)}
                 >
@@ -181,7 +198,9 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
               {LANG_OPTIONS.map((opt, i) => (
                 <button
                   key={opt.value}
-                  ref={(el) => { langBtnRefs.current[i] = el; }}
+                  ref={(el) => {
+                    langBtnRefs.current[i] = el;
+                  }}
                   className={`sp-seg-btn${i18n.language === opt.value ? " sp-seg-btn--active" : ""}`}
                   onClick={() => void i18n.changeLanguage(opt.value)}
                 >
@@ -202,7 +221,6 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
             </div>
             <span className="sp-version-badge">{version || "…"}</span>
           </div>
-
         </div>
 
         {/* Footer — update button */}
@@ -213,12 +231,20 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
               onClick={() => void handleCheckForUpdates()}
               disabled={updateStatus === "checking"}
             >
-              <RefreshCw size={13} className={updateStatus === "checking" ? "sp-spin" : ""} />
-              {updateStatus === "checking" ? t("checking") : t("checkForUpdates")}
+              <RefreshCw
+                size={13}
+                className={updateStatus === "checking" ? "sp-spin" : ""}
+              />
+              {updateStatus === "checking"
+                ? t("checking")
+                : t("checkForUpdates")}
             </button>
           )}
           {updateStatus === "available" && !isInstalling && (
-            <button className="sp-update-btn sp-update-btn--available" onClick={() => void handleInstall()}>
+            <button
+              className="sp-update-btn sp-update-btn--available"
+              onClick={() => void handleInstall()}
+            >
               <Download size={13} />
               {t("installNow")}
             </button>
@@ -227,9 +253,14 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
           {isInstalling && (
             <div className="sp-progress-wrap">
               <div className="sp-progress-bar">
-                <div className="sp-progress-fill" style={{ width: `${downloadProgress ?? 0}%` }} />
+                <div
+                  className="sp-progress-fill"
+                  style={{ width: `${downloadProgress ?? 0}%` }}
+                />
               </div>
-              <span className="sp-progress-label">{downloadProgress ?? 0}%</span>
+              <span className="sp-progress-label">
+                {downloadProgress ?? 0}%
+              </span>
             </div>
           )}
 
@@ -242,7 +273,6 @@ export function SettingsPopup({ theme, onThemeChange, onClose }: SettingsPopupPr
             </div>
           )}
         </div>
-
       </div>
     </div>
   );

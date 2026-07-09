@@ -11,7 +11,15 @@ import { SettingsPopup } from "./components/SettingsPopup";
 import { useNewmanRun } from "./hooks/useNewmanRun";
 import { usePostmanApi } from "./hooks/usePostmanApi";
 import { useTheme } from "./hooks/useTheme";
-import { type AppAction, type AppState, type Collection, type LocalCollection, type NewmanRunResult, type PostmanEnvironment, type RequestResult } from "./types";
+import {
+  type AppAction,
+  type AppState,
+  type Collection,
+  type LocalCollection,
+  type NewmanRunResult,
+  type PostmanEnvironment,
+  type RequestResult,
+} from "./types";
 
 const initialState: AppState = {
   apiKeys: [],
@@ -76,21 +84,31 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, apiKeys: [...state.apiKeys, action.payload] };
     case "RENAME_API_KEY": {
       const updatedKeys = state.apiKeys.map((k) =>
-        k.id === action.payload.id ? { ...k, label: action.payload.label } : k
+        k.id === action.payload.id ? { ...k, label: action.payload.label } : k,
       );
       return { ...state, apiKeys: updatedKeys };
     }
     case "REMOVE_API_KEY": {
       const remaining = state.apiKeys.filter((k) => k.id !== action.payload);
-      const activeStillExists = remaining.some((k) => k.id === state.activeApiKeyId);
+      const activeStillExists = remaining.some(
+        (k) => k.id === state.activeApiKeyId,
+      );
       return {
         ...state,
         apiKeys: remaining,
-        activeApiKeyId: activeStillExists ? state.activeApiKeyId : (remaining[0]?.id ?? null),
-        workspaces: state.activeApiKeyId === action.payload ? [] : state.workspaces,
-        collections: state.activeApiKeyId === action.payload ? [] : state.collections,
-        selectedCollection: state.activeApiKeyId === action.payload ? null : state.selectedCollection,
-        collectionItems: state.activeApiKeyId === action.payload ? [] : state.collectionItems,
+        activeApiKeyId: activeStillExists
+          ? state.activeApiKeyId
+          : (remaining[0]?.id ?? null),
+        workspaces:
+          state.activeApiKeyId === action.payload ? [] : state.workspaces,
+        collections:
+          state.activeApiKeyId === action.payload ? [] : state.collections,
+        selectedCollection:
+          state.activeApiKeyId === action.payload
+            ? null
+            : state.selectedCollection,
+        collectionItems:
+          state.activeApiKeyId === action.payload ? [] : state.collectionItems,
         step: remaining.length === 0 ? 0 : state.step,
       };
     }
@@ -104,27 +122,43 @@ function reducer(state: AppState, action: AppAction): AppState {
         selectedCollection: null,
         selectedLocalCollection: null,
         collectionItems: [],
-        runConfig: { ...state.runConfig, folder: null, selectedRequestIds: null },
+        runConfig: {
+          ...state.runConfig,
+          folder: null,
+          selectedRequestIds: null,
+        },
       };
     case "SET_LOCAL_COLLECTIONS":
       return { ...state, localCollections: action.payload };
     case "ADD_LOCAL_COLLECTION":
-      return { ...state, localCollections: [...state.localCollections, action.payload] };
+      return {
+        ...state,
+        localCollections: [...state.localCollections, action.payload],
+      };
     case "REMOVE_LOCAL_COLLECTION":
       return {
         ...state,
-        localCollections: state.localCollections.filter((c) => c.id !== action.payload),
+        localCollections: state.localCollections.filter(
+          (c) => c.id !== action.payload,
+        ),
         selectedLocalCollection:
-          state.selectedLocalCollection?.id === action.payload ? null : state.selectedLocalCollection,
+          state.selectedLocalCollection?.id === action.payload
+            ? null
+            : state.selectedLocalCollection,
       };
     case "RENAME_LOCAL_COLLECTION": {
       const updated = state.localCollections.map((c) =>
-        c.id === action.payload.id ? { ...c, name: action.payload.name } : c
+        c.id === action.payload.id ? { ...c, name: action.payload.name } : c,
       );
-      const sel = state.selectedLocalCollection?.id === action.payload.id
-        ? { ...state.selectedLocalCollection, name: action.payload.name }
-        : state.selectedLocalCollection;
-      return { ...state, localCollections: updated, selectedLocalCollection: sel };
+      const sel =
+        state.selectedLocalCollection?.id === action.payload.id
+          ? { ...state.selectedLocalCollection, name: action.payload.name }
+          : state.selectedLocalCollection;
+      return {
+        ...state,
+        localCollections: updated,
+        selectedLocalCollection: sel,
+      };
     }
     case "SELECT_LOCAL_COLLECTION":
       return {
@@ -132,7 +166,11 @@ function reducer(state: AppState, action: AppAction): AppState {
         selectedLocalCollection: action.payload,
         selectedCollection: null,
         collectionItems: [],
-        runConfig: { ...state.runConfig, folder: null, selectedRequestIds: null },
+        runConfig: {
+          ...state.runConfig,
+          folder: null,
+          selectedRequestIds: null,
+        },
       };
     case "SET_WORKSPACES":
       return { ...state, workspaces: action.payload };
@@ -145,7 +183,11 @@ function reducer(state: AppState, action: AppAction): AppState {
         collectionItems: [],
         environments: [],
         selectedEnvironmentUid: null,
-        runConfig: { ...state.runConfig, folder: null, selectedRequestIds: null },
+        runConfig: {
+          ...state.runConfig,
+          folder: null,
+          selectedRequestIds: null,
+        },
       };
     case "SET_COLLECTIONS":
       return { ...state, collections: action.payload };
@@ -155,7 +197,11 @@ function reducer(state: AppState, action: AppAction): AppState {
         selectedCollection: action.payload,
         selectedLocalCollection: null,
         collectionItems: action.payload ? state.collectionItems : [],
-        runConfig: { ...state.runConfig, folder: null, selectedRequestIds: null },
+        runConfig: {
+          ...state.runConfig,
+          folder: null,
+          selectedRequestIds: null,
+        },
       };
     case "SET_COLLECTION_ITEMS":
       return { ...state, collectionItems: action.payload };
@@ -170,7 +216,13 @@ function reducer(state: AppState, action: AppAction): AppState {
     case "SET_STEP":
       return { ...state, step: action.payload, error: null };
     case "RUN_START":
-      return { ...state, runStatus: "running", outputLines: [], summary: null, requestResults: [] };
+      return {
+        ...state,
+        runStatus: "running",
+        outputLines: [],
+        summary: null,
+        requestResults: [],
+      };
     case "RUN_OUTPUT":
       return { ...state, outputLines: [...state.outputLines, action.payload] };
     case "RUN_OUTPUT_BATCH":
@@ -195,7 +247,13 @@ function reducer(state: AppState, action: AppAction): AppState {
     case "CLEAR_ERROR":
       return { ...state, error: null };
     case "SET_SNAPSHOT":
-      return { ...state, snapshots: { ...state.snapshots, [action.payload.api_key_id]: action.payload } };
+      return {
+        ...state,
+        snapshots: {
+          ...state.snapshots,
+          [action.payload.api_key_id]: action.payload,
+        },
+      };
     case "SET_SYNC_STATUS":
       return { ...state, syncStatus: action.payload };
     case "SET_SYNC_ERROR":
@@ -210,8 +268,10 @@ function reducer(state: AppState, action: AppAction): AppState {
         selectedLocalCollection: p.selectedLocalCollection,
         selectedEnvironmentUid: p.selectedEnvironmentUid,
         runConfig: p.runConfig,
-        collections: p.collections.length > 0 ? p.collections : state.collections,
-        environments: p.environments.length > 0 ? p.environments : state.environments,
+        collections:
+          p.collections.length > 0 ? p.collections : state.collections,
+        environments:
+          p.environments.length > 0 ? p.environments : state.environments,
       };
     }
     default:
@@ -264,7 +324,9 @@ export default function App() {
     try {
       const stored = localStorage.getItem("api-runner-history");
       if (!stored) return [];
-      const parsed = JSON.parse(stored) as Array<RunHistoryEntry & { timestamp: string }>;
+      const parsed = JSON.parse(stored) as Array<
+        RunHistoryEntry & { timestamp: string }
+      >;
       return parsed.map((e) => ({ ...e, timestamp: new Date(e.timestamp) }));
     } catch {
       return [];
@@ -272,13 +334,24 @@ export default function App() {
   });
   const [selectedRun, setSelectedRun] = useState<RunHistoryEntry | null>(null);
   const [setupMode, setSetupMode] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<{ type: "clear" } | { type: "delete"; id: number } | { type: "deleteSelected" } | null>(null);
-  const [skipDeleteConfirm, setSkipDeleteConfirm] = useState(() => localStorage.getItem("skip-delete-confirm") === "1");
+  const [confirmAction, setConfirmAction] = useState<
+    | { type: "clear" }
+    | { type: "delete"; id: number }
+    | { type: "deleteSelected" }
+    | null
+  >(null);
+  const [skipDeleteConfirm, setSkipDeleteConfirm] = useState(
+    () => localStorage.getItem("skip-delete-confirm") === "1",
+  );
   const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  const [contextMenu, setContextMenu] = useState<{ id: number; x: number; y: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    id: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const lastClickedId = useRef<number | null>(null);
   const [pinnedIds, setPinnedIds] = useState<Set<number>>(() => {
     try {
@@ -296,7 +369,8 @@ export default function App() {
   function togglePin(id: number) {
     setPinnedIds((s) => {
       const n = new Set(s);
-      if (n.has(id)) n.delete(id); else n.add(id);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
       return n;
     });
   }
@@ -319,7 +393,10 @@ export default function App() {
       // copy without bodies first; if it still doesn't fit, drop oldest entries.
       const slim = history.map((e) => ({
         ...e,
-        requestResults: e.requestResults.map((r) => ({ ...r, response_body: "" })),
+        requestResults: e.requestResults.map((r) => ({
+          ...r,
+          response_body: "",
+        })),
       }));
       for (let keep = slim.length; keep >= 0; keep--) {
         try {
@@ -327,7 +404,11 @@ export default function App() {
           break;
         } catch {
           if (keep === 0) {
-            try { localStorage.removeItem(KEY); } catch { /* give up */ }
+            try {
+              localStorage.removeItem(KEY);
+            } catch {
+              /* give up */
+            }
           }
         }
       }
@@ -337,7 +418,13 @@ export default function App() {
   useEffect(() => {
     function onMove(e: MouseEvent) {
       if (!sidebarResizing.current) return;
-      const w = Math.max(220, Math.min(400, sidebarResizeStartW.current + e.clientX - sidebarResizeStartX.current));
+      const w = Math.max(
+        220,
+        Math.min(
+          400,
+          sidebarResizeStartW.current + e.clientX - sidebarResizeStartX.current,
+        ),
+      );
       setHistorySidebarWidth(w);
       sidebarWidthRef.current = w;
     }
@@ -345,19 +432,34 @@ export default function App() {
       if (!sidebarResizing.current) return;
       sidebarResizing.current = false;
       document.body.classList.remove("is-resizing");
-      localStorage.setItem("history-sidebar-width", String(sidebarWidthRef.current));
+      localStorage.setItem(
+        "history-sidebar-width",
+        String(sidebarWidthRef.current),
+      );
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
   }, []);
 
   function deleteHistoryEntry(id: number) {
     setDeletingIds((s) => new Set(s).add(id));
     setTimeout(() => {
       setHistory((h) => h.filter((e) => e.id !== id));
-      setDeletingIds((s) => { const n = new Set(s); n.delete(id); return n; });
-      setPinnedIds((s) => { if (!s.has(id)) return s; const n = new Set(s); n.delete(id); return n; });
+      setDeletingIds((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
+      setPinnedIds((s) => {
+        if (!s.has(id)) return s;
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
       if (selectedRun?.id === id) setSelectedRun(null);
     }, 220);
   }
@@ -377,8 +479,14 @@ export default function App() {
   function commitRename() {
     const name = renameValue.trim();
     if (name) {
-      setHistory((h) => h.map((e) => (e.id === renamingId ? { ...e, collectionName: name } : e)));
-      setSelectedRun((r) => (r?.id === renamingId ? { ...r, collectionName: name } : r));
+      setHistory((h) =>
+        h.map((e) =>
+          e.id === renamingId ? { ...e, collectionName: name } : e,
+        ),
+      );
+      setSelectedRun((r) =>
+        r?.id === renamingId ? { ...r, collectionName: name } : r,
+      );
     }
     setRenamingId(null);
   }
@@ -395,8 +503,16 @@ export default function App() {
     setDeletingIds((s) => new Set([...s, ...ids]));
     setTimeout(() => {
       setHistory((h) => h.filter((e) => !ids.has(e.id)));
-      setDeletingIds((s) => { const n = new Set(s); ids.forEach((id) => n.delete(id)); return n; });
-      setPinnedIds((s) => { const n = new Set(s); ids.forEach((id) => n.delete(id)); return n; });
+      setDeletingIds((s) => {
+        const n = new Set(s);
+        ids.forEach((id) => n.delete(id));
+        return n;
+      });
+      setPinnedIds((s) => {
+        const n = new Set(s);
+        ids.forEach((id) => n.delete(id));
+        return n;
+      });
       if (selectedRun && ids.has(selectedRun.id)) setSelectedRun(null);
     }, 220);
     setSelectedIds(new Set());
@@ -408,10 +524,13 @@ export default function App() {
         ...history.filter((h) => pinnedIds.has(h.id)),
         ...history.filter((h) => !pinnedIds.has(h.id)),
       ];
-      const fromIdx = displayOrder.findIndex((h) => h.id === lastClickedId.current);
+      const fromIdx = displayOrder.findIndex(
+        (h) => h.id === lastClickedId.current,
+      );
       const toIdx = displayOrder.findIndex((h) => h.id === run.id);
       if (fromIdx !== -1 && toIdx !== -1) {
-        const [start, end] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+        const [start, end] =
+          fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
         const rangeIds = displayOrder.slice(start, end + 1).map((h) => h.id);
         setSelectedIds((s) => new Set([...s, ...rangeIds]));
       }
@@ -420,7 +539,8 @@ export default function App() {
     if (e.ctrlKey || e.metaKey) {
       setSelectedIds((s) => {
         const n = new Set(s);
-        if (n.has(run.id)) n.delete(run.id); else n.add(run.id);
+        if (n.has(run.id)) n.delete(run.id);
+        else n.add(run.id);
         return n;
       });
       lastClickedId.current = run.id;
@@ -453,9 +573,13 @@ export default function App() {
         }}
       >
         <div className="history-item-top">
-          <span className={`history-dot ${run.failed > 0 ? "history-dot--fail" : "history-dot--pass"}`} />
+          <span
+            className={`history-dot ${run.failed > 0 ? "history-dot--fail" : "history-dot--pass"}`}
+          />
           <span className="history-item-name">{run.collectionName}</span>
-          <span className="history-item-time">{formatRelTime(run.timestamp)}</span>
+          <span className="history-item-time">
+            {formatRelTime(run.timestamp)}
+          </span>
           <button
             className="history-delete-btn"
             onClick={(e) => {
@@ -464,9 +588,14 @@ export default function App() {
               else setConfirmAction({ type: "delete", id: run.id });
             }}
             title={t("deleteEntry")}
-          ><X size={12} /></button>
+          >
+            <X size={12} />
+          </button>
         </div>
-        <div className="history-item-meta">{run.total} iter · {(run.duration / 1000).toFixed(1)}s{run.failed > 0 ? ` · ${run.failed} fail` : ""}</div>
+        <div className="history-item-meta">
+          {run.total} iter · {(run.duration / 1000).toFixed(1)}s
+          {run.failed > 0 ? ` · ${run.failed} fail` : ""}
+        </div>
       </div>
     );
   }
@@ -477,31 +606,46 @@ export default function App() {
   const activeKey = state.apiKeys.find((k) => k.id === state.activeApiKeyId);
 
   useEffect(() => {
-    api.getApiKeys().then(async (keys) => {
-      dispatch({ type: "SET_API_KEYS", payload: keys });
-      if (keys.length > 0) {
-        dispatch({ type: "SET_ACTIVE_API_KEY", payload: keys[0].id });
-        for (const k of keys) {
-          const snapshot = await api.getSourceSnapshot(k.id);
-          if (snapshot) {
-            dispatch({ type: "SET_SNAPSHOT", payload: snapshot });
-            if (k.id === keys[0].id && snapshot.workspaces.length > 0) {
-              const wsData = snapshot.workspaces.map((ws) => ws.workspace);
-              dispatch({ type: "SET_WORKSPACES", payload: wsData });
-              dispatch({ type: "SELECT_WORKSPACE", payload: wsData[0].id });
-              dispatch({ type: "SET_COLLECTIONS", payload: snapshot.workspaces[0].collections });
-              dispatch({ type: "SET_ENVIRONMENTS", payload: snapshot.workspaces[0].environments });
+    api
+      .getApiKeys()
+      .then(async (keys) => {
+        dispatch({ type: "SET_API_KEYS", payload: keys });
+        if (keys.length > 0) {
+          dispatch({ type: "SET_ACTIVE_API_KEY", payload: keys[0].id });
+          for (const k of keys) {
+            const snapshot = await api.getSourceSnapshot(k.id);
+            if (snapshot) {
+              dispatch({ type: "SET_SNAPSHOT", payload: snapshot });
+              if (k.id === keys[0].id && snapshot.workspaces.length > 0) {
+                const wsData = snapshot.workspaces.map((ws) => ws.workspace);
+                dispatch({ type: "SET_WORKSPACES", payload: wsData });
+                dispatch({ type: "SELECT_WORKSPACE", payload: wsData[0].id });
+                dispatch({
+                  type: "SET_COLLECTIONS",
+                  payload: snapshot.workspaces[0].collections,
+                });
+                dispatch({
+                  type: "SET_ENVIRONMENTS",
+                  payload: snapshot.workspaces[0].environments,
+                });
+              }
             }
           }
         }
-      }
-    }).catch((err) => console.error("[init] failed to load API keys:", err));
-    api.getLocalCollections().then((cols) => {
-      dispatch({ type: "SET_LOCAL_COLLECTIONS", payload: cols });
-    }).catch((err) => console.error("[init] failed to load local collections:", err));
+      })
+      .catch((err) => console.error("[init] failed to load API keys:", err));
+    api
+      .getLocalCollections()
+      .then((cols) => {
+        dispatch({ type: "SET_LOCAL_COLLECTIONS", payload: cols });
+      })
+      .catch((err) =>
+        console.error("[init] failed to load local collections:", err),
+      );
   }, [api]);
 
-  const hasAnySource = state.apiKeys.length > 0 || state.localCollections.length > 0;
+  const hasAnySource =
+    state.apiKeys.length > 0 || state.localCollections.length > 0;
 
   // True only once a newman process has actually been launched for the current
   // attempt. Guards the done-effect from reading a stale report belonging to a
@@ -520,17 +664,26 @@ export default function App() {
       if (state.selectedLocalCollection) {
         collectionPath = state.selectedLocalCollection.path;
       } else if (state.selectedCollection && activeKey) {
-        collectionPath = await api.exportCollection(activeKey.id, state.selectedCollection.uid);
+        collectionPath = await api.exportCollection(
+          activeKey.id,
+          state.selectedCollection.uid,
+        );
       } else {
         return;
       }
 
       let resolvedEnvFile = state.runConfig.envFile;
       if (!resolvedEnvFile && state.selectedEnvironmentUid && activeKey) {
-        resolvedEnvFile = await api.exportEnvironment(activeKey.id, state.selectedEnvironmentUid);
+        resolvedEnvFile = await api.exportEnvironment(
+          activeKey.id,
+          state.selectedEnvironmentUid,
+        );
       }
 
-      await startRun(collectionPath, { ...state.runConfig, envFile: resolvedEnvFile });
+      await startRun(collectionPath, {
+        ...state.runConfig,
+        envFile: resolvedEnvFile,
+      });
       runLaunchedRef.current = true;
     } catch (e: unknown) {
       dispatch({ type: "SET_ERROR", payload: String(e) });
@@ -545,17 +698,27 @@ export default function App() {
         .then(({ results, stats }) => {
           const s = stateRef.current;
           dispatch({ type: "SET_REQUEST_RESULTS", payload: results });
-          const collName = s.selectedLocalCollection?.name ?? s.selectedCollection?.name ?? "Run";
+          const collName =
+            s.selectedLocalCollection?.name ??
+            s.selectedCollection?.name ??
+            "Run";
           // Counts come straight from newman's JSON report. Pass/fail is measured
           // at the assertion level when the collection has test scripts, else at
           // the request level (network/HTTP errors) so it's never silently zero.
           const hasAssertions = stats.assertions_total > 0;
-          const checksTotal = hasAssertions ? stats.assertions_total : stats.requests_total;
-          const checksFailed = hasAssertions ? stats.assertions_failed : stats.requests_failed;
+          const checksTotal = hasAssertions
+            ? stats.assertions_total
+            : stats.requests_total;
+          const checksFailed = hasAssertions
+            ? stats.assertions_failed
+            : stats.requests_failed;
           const failed = stats.assertions_failed + stats.requests_failed;
           const passed = Math.max(0, checksTotal - checksFailed);
           const total = stats.iterations;
-          const duration = stats.duration_ms > 0 ? stats.duration_ms : parseDuration(s.outputLines);
+          const duration =
+            stats.duration_ms > 0
+              ? stats.duration_ms
+              : parseDuration(s.outputLines);
           const entry: RunHistoryEntry = {
             id: Date.now(),
             collectionName: collName,
@@ -572,26 +735,43 @@ export default function App() {
             selectedEnvironmentUid: s.selectedEnvironmentUid,
             activeApiKeyId: s.activeApiKeyId,
             selectedWorkspace: s.selectedWorkspace,
-            selectedCollection: s.selectedCollection ? { ...s.selectedCollection } : null,
-            selectedLocalCollection: s.selectedLocalCollection ? { ...s.selectedLocalCollection } : null,
+            selectedCollection: s.selectedCollection
+              ? { ...s.selectedCollection }
+              : null,
+            selectedLocalCollection: s.selectedLocalCollection
+              ? { ...s.selectedLocalCollection }
+              : null,
           };
           setHistory((h) => [entry, ...h]);
           setSelectedRun(entry);
         })
-        .catch(() => {});
+        .catch((e) => {
+          console.error("Error reading newman JSON:", e);
+        });
     }
   }, [state.runStatus]);
 
   function closeConfig() {
     setConfigClosing(true);
-    setTimeout(() => { setConfigOpen(false); setConfigClosing(false); }, 200);
+    setTimeout(() => {
+      setConfigOpen(false);
+      setConfigClosing(false);
+    }, 200);
   }
 
   const handleNewRun = useCallback(() => {
     if (!hasAnySource) {
       setSetupMode(true);
     } else {
-      dispatch({ type: "SET_RUN_CONFIG", payload: { iterations: 1, folder: null, selectedRequestIds: null, dataRowIndices: null } });
+      dispatch({
+        type: "SET_RUN_CONFIG",
+        payload: {
+          iterations: 1,
+          folder: null,
+          selectedRequestIds: null,
+          dataRowIndices: null,
+        },
+      });
       setConfigOpen(true);
     }
   }, [hasAnySource]);
@@ -604,7 +784,10 @@ export default function App() {
     if (keyId && wsId) {
       const snapshot = state.snapshots[keyId];
       const ws = snapshot?.workspaces.find((w) => w.workspace.id === wsId);
-      if (ws) { collections = ws.collections; environments = ws.environments; }
+      if (ws) {
+        collections = ws.collections;
+        environments = ws.environments;
+      }
     }
     dispatch({
       type: "RESTORE_RUN_CONTEXT",
@@ -654,9 +837,15 @@ export default function App() {
     return (
       <div className="app">
         <header className="app-header">
-          <span className="app-logo"><Play size={14} /> API Runner</span>
+          <span className="app-logo">
+            <Play size={14} /> API Runner
+          </span>
           <div className="app-header-right">
-            <button className="settings-open-btn" onClick={() => setSettingsOpen(true)} title={t("settings")}>
+            <button
+              className="settings-open-btn"
+              onClick={() => setSettingsOpen(true)}
+              title={t("settings")}
+            >
               <Settings size={16} />
             </button>
           </div>
@@ -666,7 +855,10 @@ export default function App() {
             <ApiKeySetup
               state={state}
               dispatch={dispatch}
-              onNext={() => { setSetupMode(false); setConfigOpen(true); }}
+              onNext={() => {
+                setSetupMode(false);
+                setConfigOpen(true);
+              }}
             />
           </div>
         </div>
@@ -677,9 +869,15 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <span className="app-logo"><Play size={14} /> API Runner</span>
+        <span className="app-logo">
+          <Play size={14} /> API Runner
+        </span>
         <div className="app-header-right">
-          <button className="settings-open-btn" onClick={() => setSettingsOpen(true)} title={t("settings")}>
+          <button
+            className="settings-open-btn"
+            onClick={() => setSettingsOpen(true)}
+            title={t("settings")}
+          >
             <Settings size={16} />
           </button>
         </div>
@@ -687,7 +885,10 @@ export default function App() {
 
       <div className="app-body">
         {/* History sidebar */}
-        <aside className="history-sidebar" style={{ width: historySidebarWidth, minWidth: historySidebarWidth }}>
+        <aside
+          className="history-sidebar"
+          style={{ width: historySidebarWidth, minWidth: historySidebarWidth }}
+        >
           <div className="history-header">
             <div className="history-header-left">
               <span className="history-title">{t("history")}</span>
@@ -705,15 +906,17 @@ export default function App() {
                 <Trash2 size={12} />
                 {t("deleteSelected", { count: selectedIds.size })}
               </button>
-            ) : history.length > 0 && (
-              <button
-                className="history-clear-btn"
-                onClick={() => setConfirmAction({ type: "clear" })}
-                title={t("clearHistory")}
-              >
-                <Trash2 size={12} />
-                {t("clearHistory")}
-              </button>
+            ) : (
+              history.length > 0 && (
+                <button
+                  className="history-clear-btn"
+                  onClick={() => setConfirmAction({ type: "clear" })}
+                  title={t("clearHistory")}
+                >
+                  <Trash2 size={12} />
+                  {t("clearHistory")}
+                </button>
+              )
             )}
           </div>
           <div className="history-list">
@@ -780,7 +983,11 @@ export default function App() {
             <RunConsole
               state={state}
               dispatch={dispatch}
-              onCancel={() => { cancelRun().catch((err: unknown) => console.error("[run] cancel failed:", err)); }}
+              onCancel={() => {
+                cancelRun().catch((err: unknown) =>
+                  console.error("[run] cancel failed:", err),
+                );
+              }}
               onBack={() => dispatch({ type: "SET_STEP", payload: 1 })}
             />
           )}
@@ -795,9 +1002,13 @@ export default function App() {
           )}
           {state.step !== 3 && !selectedRun && (
             <div className="main-empty">
-              <div className="main-empty-icon"><Play size={40} /></div>
+              <div className="main-empty-icon">
+                <Play size={40} />
+              </div>
               <div className="main-empty-text">{t("noRunSelected")}</div>
-              <button className="btn btn--primary" onClick={handleNewRun}>{t("newRun")}</button>
+              <button className="btn btn--primary" onClick={handleNewRun}>
+                {t("newRun")}
+              </button>
             </div>
           )}
         </main>
@@ -805,7 +1016,9 @@ export default function App() {
 
       {/* Full-page run config */}
       {configOpen && (
-        <div className={`config-page-overlay${configClosing ? " config-page-overlay--closing" : ""}`}>
+        <div
+          className={`config-page-overlay${configClosing ? " config-page-overlay--closing" : ""}`}
+        >
           <RunConfigDrawer
             state={state}
             dispatch={dispatch}
@@ -832,7 +1045,10 @@ export default function App() {
       {/* Rename dialog */}
       {renamingId !== null && (
         <div className="confirm-overlay" onClick={() => setRenamingId(null)}>
-          <div className="confirm-dialog confirm-dialog--compact" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="confirm-dialog confirm-dialog--compact"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="confirm-message">{t("renameEntry")}</div>
             <input
               className="rename-dialog-input"
@@ -845,10 +1061,16 @@ export default function App() {
               }}
             />
             <div className="confirm-actions">
-              <button className="confirm-btn confirm-btn--cancel" onClick={() => setRenamingId(null)}>
+              <button
+                className="confirm-btn confirm-btn--cancel"
+                onClick={() => setRenamingId(null)}
+              >
                 {t("cancel")}
               </button>
-              <button className="confirm-btn confirm-btn--delete" onClick={commitRename}>
+              <button
+                className="confirm-btn confirm-btn--delete"
+                onClick={commitRename}
+              >
                 {t("save")}
               </button>
             </div>
@@ -864,24 +1086,31 @@ export default function App() {
               {confirmAction.type === "clear"
                 ? t("confirmClearHistory")
                 : confirmAction.type === "deleteSelected"
-                ? t("confirmDeleteSelected", { count: selectedIds.size })
-                : t("confirmDeleteEntry")}
+                  ? t("confirmDeleteSelected", { count: selectedIds.size })
+                  : t("confirmDeleteEntry")}
             </div>
-            {(confirmAction.type === "delete" || confirmAction.type === "deleteSelected") && (
+            {(confirmAction.type === "delete" ||
+              confirmAction.type === "deleteSelected") && (
               <label className="confirm-skip-label">
                 <input
                   type="checkbox"
                   checked={skipDeleteConfirm}
                   onChange={(e) => {
                     setSkipDeleteConfirm(e.target.checked);
-                    localStorage.setItem("skip-delete-confirm", e.target.checked ? "1" : "0");
+                    localStorage.setItem(
+                      "skip-delete-confirm",
+                      e.target.checked ? "1" : "0",
+                    );
                   }}
                 />
                 {t("dontAskAgain")}
               </label>
             )}
             <div className="confirm-actions">
-              <button className="confirm-btn confirm-btn--cancel" onClick={() => setConfirmAction(null)}>
+              <button
+                className="confirm-btn confirm-btn--cancel"
+                onClick={() => setConfirmAction(null)}
+              >
                 {t("cancel")}
               </button>
               <button
@@ -889,7 +1118,8 @@ export default function App() {
                 autoFocus
                 onClick={() => {
                   if (confirmAction.type === "clear") clearHistory();
-                  else if (confirmAction.type === "deleteSelected") deleteSelectedEntries();
+                  else if (confirmAction.type === "deleteSelected")
+                    deleteSelectedEntries();
                   else deleteHistoryEntry(confirmAction.id);
                   setConfirmAction(null);
                 }}
@@ -903,4 +1133,3 @@ export default function App() {
     </div>
   );
 }
-

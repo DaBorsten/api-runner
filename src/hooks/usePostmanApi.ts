@@ -43,7 +43,7 @@ export function usePostmanApi() {
 }
 
 function makePostmanApi() {
-  async function getApiKeys(): Promise<ApiKeyEntry[]> {
+  function getApiKeys(): Promise<ApiKeyEntry[]> {
     return invoke<ApiKeyEntry[]>("get_api_keys");
   }
 
@@ -59,7 +59,7 @@ function makePostmanApi() {
     await invoke("delete_api_key", { id });
   }
 
-  async function getLocalCollections(): Promise<LocalCollection[]> {
+  function getLocalCollections(): Promise<LocalCollection[]> {
     return invoke<LocalCollection[]>("get_local_collections");
   }
 
@@ -130,22 +130,22 @@ function makePostmanApi() {
     return data;
   }
 
-  async function exportEnvironment(apiKeyId: string, environmentUid: string): Promise<string> {
+  function exportEnvironment(apiKeyId: string, environmentUid: string): Promise<string> {
     return invoke<string>("export_environment", { apiKeyId, environmentUid });
   }
 
-  async function exportCollection(
+  function exportCollection(
     apiKeyId: string,
     collectionUid: string
   ): Promise<string> {
     return invoke<string>("export_collection", { apiKeyId, collectionUid });
   }
 
-  async function readLocalCollection(path: string): Promise<CollectionItem[]> {
+  function readLocalCollection(path: string): Promise<CollectionItem[]> {
     return invoke<CollectionItem[]>("read_local_collection", { path });
   }
 
-  async function getSourceSnapshot(apiKeyId: string): Promise<SourceSnapshot | null> {
+  function getSourceSnapshot(apiKeyId: string): Promise<SourceSnapshot | null> {
     return invoke<SourceSnapshot | null>("get_source_snapshot", { apiKeyId });
   }
 

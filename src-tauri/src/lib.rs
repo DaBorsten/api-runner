@@ -76,6 +76,7 @@ pub struct Collection {
     pub id: String,
     pub name: String,
     pub uid: String,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -163,6 +164,8 @@ pub struct WorkspaceSnapshot {
     pub workspace: Workspace,
     pub collections: Vec<Collection>,
     pub environments: Vec<Environment>,
+    #[serde(default)]
+    pub collection_items: std::collections::HashMap<String, Vec<CollectionItem>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -185,13 +188,8 @@ struct PostmanWorkspacesResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct PostmanWorkspaceDetail {
-    workspace: WorkspaceDetail,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct WorkspaceDetail {
-    collections: Option<Vec<CollectionRef>>,
+struct PostmanCollectionsResponse {
+    collections: Vec<CollectionRef>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -199,6 +197,8 @@ struct CollectionRef {
     id: String,
     name: String,
     uid: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -606,7 +606,10 @@ async fn fetch_collections(
     workspace_id: String,
 ) -> Result<Vec<Collection>, String> {
     let api_key = resolve_api_key(&api_key_id)?;
-    let url = format!("https://api.getpostman.com/workspaces/{}", workspace_id);
+    let url = format!(
+        "https://api.getpostman.com/collections?workspace={}",
+        workspace_id
+    );
     let resp = state
         .http
         .get(&url)
@@ -619,16 +622,15 @@ async fn fetch_collections(
         return Err(format!("Postman API error: {}", resp.status()));
     }
 
-    let data: PostmanWorkspaceDetail = resp.json().await.map_err(|e| e.to_string())?;
+    let data: PostmanCollectionsResponse = resp.json().await.map_err(|e| e.to_string())?;
     let collections = data
-        .workspace
         .collections
-        .unwrap_or_default()
         .into_iter()
         .map(|c| Collection {
             id: c.id,
             name: c.name,
             uid: c.uid,
+            updated_at: c.updated_at,
         })
         .collect();
     Ok(collections)

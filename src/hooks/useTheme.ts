@@ -4,19 +4,23 @@ import { useEffect, useState } from "react";
 export type ThemeMode = "light" | "dark" | "system";
 
 function getSystemTheme(): "light" | "dark" {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 export function useTheme() {
   const [mode, setMode] = useState<ThemeMode>(
-    () => (localStorage.getItem("theme") as ThemeMode | null) ?? "system"
+    () => (localStorage.getItem("theme") as ThemeMode | null) ?? "system",
   );
 
   useEffect(() => {
     const apply = (m: ThemeMode) => {
       const resolved = m === "system" ? getSystemTheme() : m;
       document.documentElement.setAttribute("data-theme", resolved);
-      invoke("set_window_theme", { theme: m }).catch(() => {});
+      invoke("set_window_theme", { theme: m }).catch((e) => {
+        console.error("Failed to set window theme", e);
+      });
     };
 
     apply(mode);
