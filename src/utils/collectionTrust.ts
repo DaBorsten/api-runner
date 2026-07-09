@@ -20,7 +20,9 @@ export interface TrustPromptText {
  *
  * Returns `true` if the import may proceed, `false` if the user declined.
  */
-export async function confirmLocalCollectionTrust(text: TrustPromptText): Promise<boolean> {
+export async function confirmLocalCollectionTrust(
+  text: TrustPromptText,
+): Promise<boolean> {
   try {
     if (localStorage.getItem(ACK_KEY) === "1") return true;
   } catch {

@@ -109,7 +109,8 @@ export function DataFilePreview({
     }
   }, [allSelected, noneSelected]);
 
-  if (loading) return <div className="data-preview-status">{t("dataPreviewLoading")}</div>;
+  if (loading)
+    return <div className="data-preview-status">{t("dataPreviewLoading")}</div>;
   if (error)
     return (
       <div className="data-preview-status data-preview-status--error">
@@ -117,11 +118,7 @@ export function DataFilePreview({
       </div>
     );
   if (!preview || total === 0) {
-    return (
-      <div className="data-preview-status">
-        {t("dataPreviewEmpty")}
-      </div>
-    );
+    return <div className="data-preview-status">{t("dataPreviewEmpty")}</div>;
   }
 
   const filteredRows: Array<{ origIndex: number; cells: string[] }> =
@@ -129,11 +126,7 @@ export function DataFilePreview({
       ? preview.rows.reduce<Array<{ origIndex: number; cells: string[] }>>(
           (acc, row, i) => {
             const lower = searchQuery.toLowerCase();
-            if (
-              row.some((cell) =>
-                cell.toLowerCase().includes(lower),
-              )
-            ) {
+            if (row.some((cell) => cell.toLowerCase().includes(lower))) {
               acc.push({ origIndex: i, cells: row });
             }
             return acc;
@@ -150,9 +143,7 @@ export function DataFilePreview({
   }
 
   function toggleRow(i: number, shiftKey: boolean) {
-    const set = new Set(
-      selected ?? preview!.rows.map((_, idx) => idx),
-    );
+    const set = new Set(selected ?? preview!.rows.map((_, idx) => idx));
 
     if (
       shiftKey &&

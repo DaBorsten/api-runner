@@ -20,7 +20,14 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [dragging, setDragging] = useState(false);
   const dragCounter = useRef(0);
-  const { saveApiKey, saveLocalCollection, fetchWorkspaces, fetchCollections, fetchEnvironments, saveSourceSnapshot } = usePostmanApi();
+  const {
+    saveApiKey,
+    saveLocalCollection,
+    fetchWorkspaces,
+    fetchCollections,
+    fetchEnvironments,
+    saveSourceSnapshot,
+  } = usePostmanApi();
 
   async function importCollectionFile(filePath: string) {
     const trusted = await confirmLocalCollectionTrust({
@@ -34,7 +41,10 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
     const name = fileName.replace(/\.json$/i, "");
     const id = `local_${Date.now()}`;
     await saveLocalCollection(id, name, filePath);
-    dispatch({ type: "ADD_LOCAL_COLLECTION", payload: { id, name, path: filePath } });
+    dispatch({
+      type: "ADD_LOCAL_COLLECTION",
+      payload: { id, name, path: filePath },
+    });
     onNext();
   }
 
@@ -94,7 +104,7 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
               fetchEnvironments(id, ws.id, true),
             ]);
             return { workspace: ws, collections: cols, environments: envs };
-          })
+          }),
         );
         const snapshot: SourceSnapshot = {
           api_key_id: id,
@@ -107,8 +117,14 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
         dispatch({ type: "SET_WORKSPACES", payload: wsData });
         if (wsData.length > 0) {
           dispatch({ type: "SELECT_WORKSPACE", payload: wsData[0].id });
-          dispatch({ type: "SET_COLLECTIONS", payload: wsSnapshots[0].collections });
-          dispatch({ type: "SET_ENVIRONMENTS", payload: wsSnapshots[0].environments });
+          dispatch({
+            type: "SET_COLLECTIONS",
+            payload: wsSnapshots[0].collections,
+          });
+          dispatch({
+            type: "SET_ENVIRONMENTS",
+            payload: wsSnapshots[0].environments,
+          });
         }
         dispatch({ type: "SET_SYNC_STATUS", payload: "idle" });
       } catch (syncErr: unknown) {
@@ -137,17 +153,19 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
         onDrop={(e) => void handleDrop(e)}
         onClick={() => void handleImportCollection()}
       >
-        <span className="drop-zone-icon"><FolderOpen size={32} /></span>
+        <span className="drop-zone-icon">
+          <FolderOpen size={32} />
+        </span>
         <span className="drop-zone-text">
           {dragging ? t("dropRelease") : t("dropOrClick")}
         </span>
       </div>
 
-      <div className="setup-divider"><span>{t("connectWithKey")}</span></div>
+      <div className="setup-divider">
+        <span>{t("connectWithKey")}</span>
+      </div>
 
-      <p className="step-desc">
-        {t("apiKeyDesc")}
-      </p>
+      <p className="step-desc">{t("apiKeyDesc")}</p>
 
       <div className="field-col">
         <input
@@ -164,10 +182,16 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
             placeholder="PMAK-..."
             value={inputKey}
             onChange={(e) => setInputKey(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void handleSave(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleSave();
+            }}
             autoFocus
           />
-          <button className="btn btn--primary" onClick={() => void handleSave()} disabled={saving || syncing || !inputKey.trim()}>
+          <button
+            className="btn btn--primary"
+            onClick={() => void handleSave()}
+            disabled={saving || syncing || !inputKey.trim()}
+          >
             {saving ? t("saving") : syncing ? t("syncing") : t("add")}
           </button>
         </div>

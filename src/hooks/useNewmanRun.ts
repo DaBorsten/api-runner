@@ -34,10 +34,15 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
     listen<string>("newman://output", (event) => {
       pending.current.push(event.payload);
       scheduleFlush();
-    }).then((fn) => {
-      if (cancelled) fn();
-      else { outputUnsub = fn; unlistenOutput.current = fn; }
-    }).catch((err) => console.error("[newman] output listener failed:", err));
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else {
+          outputUnsub = fn;
+          unlistenOutput.current = fn;
+        }
+      })
+      .catch((err) => console.error("[newman] output listener failed:", err));
 
     listen<number>("newman://done", (event) => {
       // Flush any buffered output synchronously so no line lands after the
@@ -48,10 +53,15 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
       }
       flush();
       dispatch({ type: "RUN_DONE", payload: event.payload });
-    }).then((fn) => {
-      if (cancelled) fn();
-      else { doneUnsub = fn; unlistenDone.current = fn; }
-    }).catch((err) => console.error("[newman] done listener failed:", err));
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else {
+          doneUnsub = fn;
+          unlistenDone.current = fn;
+        }
+      })
+      .catch((err) => console.error("[newman] done listener failed:", err));
 
     return () => {
       cancelled = true;
@@ -66,7 +76,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
 
   async function startRun(
     collectionPath: string,
-    config: RunConfig
+    config: RunConfig,
   ): Promise<void> {
     // Drop any output buffered from a previous (superseded) run.
     pending.current = [];

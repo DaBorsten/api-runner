@@ -1,6 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useMemo } from "react";
-import type { ApiKeyEntry, Collection, CollectionItem, LocalCollection, PostmanEnvironment, SourceSnapshot, Workspace } from "../types";
+import type {
+  ApiKeyEntry,
+  Collection,
+  CollectionItem,
+  LocalCollection,
+  PostmanEnvironment,
+  SourceSnapshot,
+  Workspace,
+} from "../types";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -10,7 +18,10 @@ function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
     p,
     new Promise<T>((_, reject) =>
       setTimeout(
-        () => reject(new Error(`${label} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`)),
+        () =>
+          reject(
+            new Error(`${label} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`),
+          ),
         REQUEST_TIMEOUT_MS,
       ),
     ),
@@ -47,7 +58,11 @@ function makePostmanApi() {
     return invoke<ApiKeyEntry[]>("get_api_keys");
   }
 
-  async function saveApiKey(id: string, label: string, key: string): Promise<void> {
+  async function saveApiKey(
+    id: string,
+    label: string,
+    key: string,
+  ): Promise<void> {
     await invoke("save_api_key", { id, label, key });
   }
 
@@ -63,7 +78,11 @@ function makePostmanApi() {
     return invoke<LocalCollection[]>("get_local_collections");
   }
 
-  async function saveLocalCollection(id: string, name: string, path: string): Promise<void> {
+  async function saveLocalCollection(
+    id: string,
+    name: string,
+    path: string,
+  ): Promise<void> {
     await invoke("save_local_collection", { id, name, path });
   }
 
@@ -71,7 +90,10 @@ function makePostmanApi() {
     await invoke("delete_local_collection", { id });
   }
 
-  async function fetchWorkspaces(apiKeyId: string, force = false): Promise<Workspace[]> {
+  async function fetchWorkspaces(
+    apiKeyId: string,
+    force = false,
+  ): Promise<Workspace[]> {
     const cached = cache.workspaces.get(apiKeyId);
     if (!force && isFresh(cached)) return cached.data;
     const data = await withTimeout(
@@ -85,7 +107,7 @@ function makePostmanApi() {
   async function fetchCollections(
     apiKeyId: string,
     workspaceId: string,
-    force = false
+    force = false,
   ): Promise<Collection[]> {
     const key = `${apiKeyId}:${workspaceId}`;
     const cached = cache.collections.get(key);
@@ -101,13 +123,16 @@ function makePostmanApi() {
   async function fetchCollectionDetail(
     apiKeyId: string,
     collectionUid: string,
-    force = false
+    force = false,
   ): Promise<CollectionItem[]> {
     const key = `${apiKeyId}:${collectionUid}`;
     const cached = cache.collectionDetail.get(key);
     if (!force && isFresh(cached)) return cached.data;
     const data = await withTimeout(
-      invoke<CollectionItem[]>("fetch_collection_detail", { apiKeyId, collectionUid }),
+      invoke<CollectionItem[]>("fetch_collection_detail", {
+        apiKeyId,
+        collectionUid,
+      }),
       "fetch_collection_detail",
     );
     cache.collectionDetail.set(key, { data, ts: Date.now() });
@@ -117,26 +142,32 @@ function makePostmanApi() {
   async function fetchEnvironments(
     apiKeyId: string,
     workspaceId: string,
-    force = false
+    force = false,
   ): Promise<PostmanEnvironment[]> {
     const key = `${apiKeyId}:${workspaceId}`;
     const cached = cache.environments.get(key);
     if (!force && isFresh(cached)) return cached.data;
     const data = await withTimeout(
-      invoke<PostmanEnvironment[]>("fetch_environments", { apiKeyId, workspaceId }),
+      invoke<PostmanEnvironment[]>("fetch_environments", {
+        apiKeyId,
+        workspaceId,
+      }),
       "fetch_environments",
     );
     cache.environments.set(key, { data, ts: Date.now() });
     return data;
   }
 
-  function exportEnvironment(apiKeyId: string, environmentUid: string): Promise<string> {
+  function exportEnvironment(
+    apiKeyId: string,
+    environmentUid: string,
+  ): Promise<string> {
     return invoke<string>("export_environment", { apiKeyId, environmentUid });
   }
 
   function exportCollection(
     apiKeyId: string,
-    collectionUid: string
+    collectionUid: string,
   ): Promise<string> {
     return invoke<string>("export_collection", { apiKeyId, collectionUid });
   }

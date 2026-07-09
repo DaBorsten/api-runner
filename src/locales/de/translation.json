@@ -42,7 +42,6 @@
   "minutesAgo": "vor {{count}} min",
   "hoursAgo": "vor {{count}} h",
   "daysAgo": "vor {{count}} d",
-
   "newRunLabel": "NEUER RUN",
   "configuration": "Konfiguration",
   "source": "QUELLE",
@@ -120,7 +119,6 @@
   "msOver": "ms over {{count}} iterations",
   "latest": "latest {{count}}",
   "emptyResponse": "(leere Antwort)",
-
   "dataPreviewTitle": "Daten-Vorschau",
   "dataPreviewLoading": "Lade Vorschau…",
   "dataPreviewEmpty": "Keine Zeilen in dieser Datei gefunden.",
@@ -131,11 +129,9 @@
   "dataPreviewResize": "Höhe der Vorschau ziehen",
   "dataPreviewToggleAll": "Alle Zeilen aus-/abwählen",
   "dataPreviewNoMatch": "Keine Treffer für \"{{query}}\"",
-
   "selectCollectionWarning": "Wähle eine Collection aus der Sidebar.",
   "jsonCollapse": "JSON einklappen",
   "jsonExpand": "JSON anzeigen",
-
   "localNamePlaceholder": "Name (z.B. My API, Staging…)",
   "renameSource": "Umbenennen",
   "manageSources": "Quellen verwalten",

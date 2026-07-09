@@ -6,13 +6,18 @@ import { type FormField, type RequestBody } from "../types";
 
 function useCodeTheme() {
   const [isDark, setIsDark] = useState(
-    () => document.documentElement.getAttribute("data-theme") !== "light"
+    () => document.documentElement.getAttribute("data-theme") !== "light",
   );
   useEffect(() => {
     const obs = new MutationObserver(() => {
-      setIsDark(document.documentElement.getAttribute("data-theme") !== "light");
+      setIsDark(
+        document.documentElement.getAttribute("data-theme") !== "light",
+      );
     });
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
     return () => obs.disconnect();
   }, []);
   return isDark ? themes.vsDark : themes.vsLight;
@@ -37,15 +42,28 @@ function tryFormatJson(s: string): string {
 
 const PLACEHOLDER_RE = /(\{\{[^}]*\}\})/g;
 
-function renderTokenWithPlaceholders(token: { types: string[]; content: string }, props: React.HTMLAttributes<HTMLSpanElement>, key?: React.Key) {
+function renderTokenWithPlaceholders(
+  token: { types: string[]; content: string },
+  props: React.HTMLAttributes<HTMLSpanElement>,
+  key?: React.Key,
+) {
   const parts = token.content.split(PLACEHOLDER_RE);
-  if (parts.length === 1) return <span key={key} {...props}>{token.content}</span>;
+  if (parts.length === 1)
+    return (
+      <span key={key} {...props}>
+        {token.content}
+      </span>
+    );
   return (
     <span key={key} {...props}>
       {parts.map((part, i) =>
-        PLACEHOLDER_RE.test(part)
-          ? <span key={i} className="placeholder-token">{part}</span>
-          : part
+        PLACEHOLDER_RE.test(part) ? (
+          <span key={i} className="placeholder-token">
+            {part}
+          </span>
+        ) : (
+          part
+        ),
       )}
     </span>
   );
@@ -92,8 +110,19 @@ function FieldValue({ value }: { value: string }) {
     const formatted = tryFormatJson(value);
     return (
       <div>
-        <button className="formdata-expand-btn" onClick={() => setExpanded(e => !e)}>
-          {expanded ? <><ChevronDown size={12} /> {t("jsonCollapse")}</> : <><ChevronRight size={12} /> {t("jsonExpand")}</>}
+        <button
+          className="formdata-expand-btn"
+          onClick={() => setExpanded((e) => !e)}
+        >
+          {expanded ? (
+            <>
+              <ChevronDown size={12} /> {t("jsonCollapse")}
+            </>
+          ) : (
+            <>
+              <ChevronRight size={12} /> {t("jsonExpand")}
+            </>
+          )}
         </button>
         {expanded && <JsonHighlight code={formatted} />}
       </div>
@@ -118,12 +147,20 @@ function FieldTable({ fields, label }: { fields: FormField[]; label: string }) {
         {fields.map((f, i) => (
           <tr key={i} className={f.type === "file" ? "formdata-row--file" : ""}>
             <td className="formdata-key">{f.key}</td>
-            <td className="formdata-value"><FieldValue value={f.value} /></td>
+            <td className="formdata-value">
+              <FieldValue value={f.value} />
+            </td>
             {isFormData && (
               <td className="formdata-type">
-                {f.type === "file"
-                  ? <span className="formdata-badge formdata-badge--file">file</span>
-                  : <span className="formdata-badge formdata-badge--text">text</span>}
+                {f.type === "file" ? (
+                  <span className="formdata-badge formdata-badge--file">
+                    file
+                  </span>
+                ) : (
+                  <span className="formdata-badge formdata-badge--text">
+                    text
+                  </span>
+                )}
               </td>
             )}
           </tr>
@@ -135,6 +172,7 @@ function FieldTable({ fields, label }: { fields: FormField[]; label: string }) {
 
 export function RequestBodyViewer({ body }: Props) {
   if (body.type === "Raw") return <RawBody content={body.content} />;
-  if (body.type === "FormData") return <FieldTable fields={body.content} label="FormData" />;
+  if (body.type === "FormData")
+    return <FieldTable fields={body.content} label="FormData" />;
   return <FieldTable fields={body.content} label="UrlEncoded" />;
 }

@@ -55,7 +55,7 @@ async function ensureSandboxCache(): Promise<void> {
   const env = require("postman-sandbox/lib/environment");
   const code: string = await new Promise((resolve, reject) => {
     Bundle.load(env).compile((err: Error | null, out: string) =>
-      err ? reject(err) : resolve(out)
+      err ? reject(err) : resolve(out),
     );
   });
   mkdirSync(dirname(cacheFile), { recursive: true });
@@ -63,7 +63,7 @@ async function ensureSandboxCache(): Promise<void> {
   // function (see postman-sandbox/lib/bootcode.js).
   writeFileSync(
     cacheFile,
-    `module.exports = function (done) { return done(null, ${JSON.stringify(code)}); };\n`
+    `module.exports = function (done) { return done(null, ${JSON.stringify(code)}); };\n`,
   );
   console.log(`Wrote ${cacheFile} (${code.length} bytes of bootcode).`);
 }
@@ -132,7 +132,7 @@ const { exitCode } = Bun.spawnSync(
     "--external",
     "browserify",
   ],
-  { stdout: "inherit", stderr: "inherit" }
+  { stdout: "inherit", stderr: "inherit" },
 );
 
 if (exitCode !== 0) process.exit(exitCode);

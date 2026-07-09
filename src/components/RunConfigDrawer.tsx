@@ -56,18 +56,25 @@ interface Props {
 function collectionsNeedingRefetch(
   existing: SourceSnapshot | null,
   fresh: WorkspaceSnapshot[],
-): { workspaceId: string; collection: WorkspaceSnapshot["collections"][number] }[] {
+): {
+  workspaceId: string;
+  collection: WorkspaceSnapshot["collections"][number];
+}[] {
   const existingMap = new Map(
     (existing?.workspaces ?? []).map((ws) => [ws.workspace.id, ws]),
   );
-  const out: { workspaceId: string; collection: WorkspaceSnapshot["collections"][number] }[] = [];
+  const out: {
+    workspaceId: string;
+    collection: WorkspaceSnapshot["collections"][number];
+  }[] = [];
   for (const freshWs of fresh) {
     const prev = existingMap.get(freshWs.workspace.id);
     for (const c of freshWs.collections) {
       const prevCol = prev?.collections.find((p) => p.uid === c.uid);
       const hasCachedItems = !!prev?.collection_items?.[c.uid];
       const changed = !prevCol || prevCol.updated_at !== c.updated_at;
-      if (changed || !hasCachedItems) out.push({ workspaceId: freshWs.workspace.id, collection: c });
+      if (changed || !hasCachedItems)
+        out.push({ workspaceId: freshWs.workspace.id, collection: c });
     }
   }
   return out;
@@ -112,7 +119,9 @@ async function mapLimit<T, R>(
       results[i] = await fn(items[i]);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker),
+  );
   return results;
 }
 
@@ -636,7 +645,10 @@ export function RunConfigDrawer({
           );
           const ws = merged.find((w) => w.workspace.id === workspaceId);
           if (ws) {
-            ws.collection_items = { ...ws.collection_items, [collection.uid]: items };
+            ws.collection_items = {
+              ...ws.collection_items,
+              [collection.uid]: items,
+            };
           }
         } catch (err) {
           // Mark as attempted with an empty cache so we don't refetch it on
@@ -644,9 +656,15 @@ export function RunConfigDrawer({
           // on demand if the user actually opens it.
           const ws = merged.find((w) => w.workspace.id === workspaceId);
           if (ws && !ws.collection_items?.[collection.uid]) {
-            ws.collection_items = { ...ws.collection_items, [collection.uid]: [] };
+            ws.collection_items = {
+              ...ws.collection_items,
+              [collection.uid]: [],
+            };
           }
-          console.error(`[sync] detail fetch failed for ${collection.uid}:`, err);
+          console.error(
+            `[sync] detail fetch failed for ${collection.uid}:`,
+            err,
+          );
         }
       });
 

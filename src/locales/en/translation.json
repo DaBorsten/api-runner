@@ -42,7 +42,6 @@
   "minutesAgo": "{{count}} min ago",
   "hoursAgo": "{{count}} h ago",
   "daysAgo": "{{count}} d ago",
-
   "newRunLabel": "NEW RUN",
   "configuration": "Configuration",
   "source": "SOURCE",
@@ -120,7 +119,6 @@
   "msOver": "ms over {{count}} iterations",
   "latest": "latest {{count}}",
   "emptyResponse": "(empty response)",
-
   "dataPreviewTitle": "Data Preview",
   "dataPreviewLoading": "Loading preview…",
   "dataPreviewEmpty": "No rows found in this file.",
@@ -131,11 +129,9 @@
   "dataPreviewResize": "Drag to resize preview",
   "dataPreviewToggleAll": "Select/deselect all rows",
   "dataPreviewNoMatch": "No results for \"{{query}}\"",
-
   "selectCollectionWarning": "Select a collection from the sidebar.",
   "jsonCollapse": "Collapse JSON",
   "jsonExpand": "Show JSON",
-
   "localNamePlaceholder": "Name (e.g. My API, Staging…)",
   "renameSource": "Rename",
   "manageSources": "Manage Sources",

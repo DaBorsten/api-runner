@@ -24,7 +24,11 @@ export function RunConsole({ state, onCancel, onBack }: Props) {
     <div className="step-panel step-panel--console">
       <div className="console-header">
         <h2 className="step-title">
-          {isRunning ? t("running") : state.runStatus === "error" ? t("error") : t("runComplete")}
+          {isRunning
+            ? t("running")
+            : state.runStatus === "error"
+              ? t("error")
+              : t("runComplete")}
         </h2>
         <div className="console-actions">
           {isRunning && (
@@ -34,7 +38,11 @@ export function RunConsole({ state, onCancel, onBack }: Props) {
             </button>
           )}
           {!isRunning && (
-            <button className="btn btn--ghost" onClick={onBack} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <button
+              className="btn btn--ghost"
+              onClick={onBack}
+              style={{ display: "flex", alignItems: "center", gap: "6px" }}
+            >
               <ArrowLeft size={14} />
               {t("back")}
             </button>
@@ -58,14 +66,24 @@ export function RunConsole({ state, onCancel, onBack }: Props) {
 }
 
 function getLineClass(line: string): string {
-  if (line.includes("failed") || line.includes("AssertionError") || line.includes("[stderr]")) {
+  if (
+    line.includes("failed") ||
+    line.includes("AssertionError") ||
+    line.includes("[stderr]")
+  ) {
     return "console-line--error";
   }
   if (line.includes("✓") || line.includes("passed")) {
     return "console-line--success";
   }
-  if (line.startsWith("→") || line.startsWith("  GET") || line.startsWith("  POST") ||
-      line.startsWith("  PUT") || line.startsWith("  DELETE") || line.startsWith("  PATCH")) {
+  if (
+    line.startsWith("→") ||
+    line.startsWith("  GET") ||
+    line.startsWith("  POST") ||
+    line.startsWith("  PUT") ||
+    line.startsWith("  DELETE") ||
+    line.startsWith("  PATCH")
+  ) {
     return "console-line--request";
   }
   return "";

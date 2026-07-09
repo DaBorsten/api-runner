@@ -187,13 +187,16 @@ export type AppAction =
   | { type: "SET_SNAPSHOT"; payload: SourceSnapshot }
   | { type: "SET_SYNC_STATUS"; payload: "idle" | "syncing" | "error" }
   | { type: "SET_SYNC_ERROR"; payload: string | null }
-  | { type: "RESTORE_RUN_CONTEXT"; payload: {
-      activeApiKeyId: string | null;
-      selectedWorkspace: string | null;
-      selectedCollection: Collection | null;
-      selectedLocalCollection: LocalCollection | null;
-      selectedEnvironmentUid: string | null;
-      runConfig: RunConfig;
-      collections: Collection[];
-      environments: PostmanEnvironment[];
-    }};
+  | {
+      type: "RESTORE_RUN_CONTEXT";
+      payload: {
+        activeApiKeyId: string | null;
+        selectedWorkspace: string | null;
+        selectedCollection: Collection | null;
+        selectedLocalCollection: LocalCollection | null;
+        selectedEnvironmentUid: string | null;
+        runConfig: RunConfig;
+        collections: Collection[];
+        environments: PostmanEnvironment[];
+      };
+    };
