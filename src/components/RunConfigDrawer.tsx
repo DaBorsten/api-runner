@@ -769,22 +769,37 @@ export function RunConfigDrawer({
   // user actively changes the row selection — not on initial load or re-run restore.
   useEffect(() => {
     if (!cfg.dataFile) return;
-    if (!dataRowUserChangedRef.current) return;
+    // dataRowIndices === null means "all rows" (fresh file pick, or a new run that
+    // reset the selection) — iterations must always reflect the total in that case,
+    // even without an explicit user edit.
+    if (!dataRowUserChangedRef.current && cfg.dataRowIndices !== null) return;
     // The pending flag may have been left over from an edit to a different file
     // (e.g. a rerun restored a different dataFile before the total arrived) — a
     // stale flag must not overwrite the newly restored iterations count.
-    if (dataRowUserChangedFileRef.current !== cfg.dataFile) {
+    if (
+      dataRowUserChangedRef.current &&
+      dataRowUserChangedFileRef.current !== cfg.dataFile
+    ) {
       dataRowUserChangedRef.current = false;
       return;
     }
+    // dataRowTotal may still be 0 when the file just changed but hasn't loaded yet
+    // (dataRowIndices is null in that case) — keep the flag set to retry once the
+    // total arrives. An explicit empty selection ([]) is not that case: 0 is final.
+    if (cfg.dataRowIndices === null && dataRowTotal === 0) return;
     const selectedCount =
       cfg.dataRowIndices === null ? dataRowTotal : cfg.dataRowIndices.length;
-    // dataRowTotal may still be 0 when the file just changed but hasn't loaded yet.
-    // Keep the flag set so we retry once the total arrives.
-    if (selectedCount === 0) return;
+    const nextIterations = Math.max(1, selectedCount);
+    if (cfg.iterations === nextIterations) return;
     dataRowUserChangedRef.current = false;
-    setConfig({ iterations: selectedCount });
-  }, [cfg.dataRowIndices, dataRowTotal, cfg.dataFile, setConfig]);
+    setConfig({ iterations: nextIterations });
+  }, [
+    cfg.dataRowIndices,
+    dataRowTotal,
+    cfg.dataFile,
+    cfg.iterations,
+    setConfig,
+  ]);
 
   useEffect(() => {
     if (!showAddPopup) return;
