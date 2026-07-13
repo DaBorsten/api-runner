@@ -107,7 +107,7 @@ export function DataFilePreview({
     if (headRef.current) {
       headRef.current.indeterminate = !allSelected && !noneSelected;
     }
-  }, [allSelected, noneSelected]);
+  }, [allSelected, noneSelected, total]);
 
   if (loading)
     return <div className="data-preview-status">{t("dataPreviewLoading")}</div>;
