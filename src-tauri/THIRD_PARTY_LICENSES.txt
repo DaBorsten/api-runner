@@ -567,7 +567,7 @@
 │  ├─ url: https://github.com/es128
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\anymatch
 │  └─ licenseFile: C:\Users\DaBorsten\Projekte\api-runner\node_modules\postman-sandbox\node_modules\anymatch\LICENSE
-├─ api-runner@0.2.3
+├─ api-runner@0.2.4
 │  ├─ licenses: [1m[31mUNLICENSED[39m[22m
 │  ├─ private: true
 │  ├─ path: C:\Users\DaBorsten\Projekte\api-runner
