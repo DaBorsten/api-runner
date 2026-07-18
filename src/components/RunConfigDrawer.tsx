@@ -17,6 +17,7 @@ import {
   Upload,
   Globe,
   ArrowLeft,
+  Eye,
 } from "lucide-react";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -36,6 +37,10 @@ import { type usePostmanApi } from "../hooks/usePostmanApi";
 import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 import { DataFilePreview } from "./DataFilePreview";
 import { RequestBodyViewer } from "./RequestBodyViewer";
+
+function hideEnvDropdown() {
+  document.getElementById("env-dropdown-popover")?.hidePopover();
+}
 
 function activateOnKey(onClick: () => void) {
   return (e: React.KeyboardEvent) => {
@@ -200,7 +205,6 @@ export function RunConfigDrawer({
 
   const folderReqId = useRef(0);
   const masterCheckboxRef = useRef<HTMLInputElement>(null);
-  const envDropdownRef = useRef<HTMLDivElement>(null);
   const lastClickedIdRef = useRef<string | null>(null);
 
   const selectedRequestIds: Set<string> = new Set(
@@ -464,33 +468,6 @@ export function RunConfigDrawer({
     setPrevEnvFile(state.runConfig.envFile);
     if (state.runConfig.envFile) setEnvMode("local");
   }
-
-  useEffect(() => {
-    if (openDropdown !== "environment") return;
-    let downOutside = false;
-    function onDown(e: MouseEvent) {
-      downOutside = !!(
-        envDropdownRef.current &&
-        !envDropdownRef.current.contains(e.target as Node)
-      );
-    }
-    function onUp(e: MouseEvent) {
-      if (
-        downOutside &&
-        envDropdownRef.current &&
-        !envDropdownRef.current.contains(e.target as Node)
-      ) {
-        setOpenDropdown(null);
-      }
-      downOutside = false;
-    }
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("mouseup", onUp);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("mouseup", onUp);
-    };
-  }, [openDropdown]);
 
   useEffect(() => {
     function onMove(e: MouseEvent) {
@@ -1538,6 +1515,7 @@ export function RunConfigDrawer({
                     onClick={() => setDataPreviewCollapsed(false)}
                     title={t("openPreview")}
                   >
+                    <Eye size={13} className="data-file-card-name-icon" />
                     {cfg.dataFile.split(/[\\/]/).pop()}
                   </button>
                   <div className="data-file-card-status">
@@ -1632,19 +1610,15 @@ export function RunConfigDrawer({
             </div>
           </div>
           {envMode === "postman" && (
-            <div className="env-postman-wrap" ref={envDropdownRef}>
+            <div className="env-postman-wrap">
               <button
-                className={`env-postman-chip${openDropdown === "environment" ? " env-postman-chip--open" : ""}${state.selectedLocalCollection || state.environments.length === 0 ? " env-postman-chip--disabled" : ""}`}
-                onClick={() => {
-                  if (
-                    state.selectedLocalCollection ||
-                    state.environments.length === 0
-                  )
-                    return;
-                  setOpenDropdown(
-                    openDropdown === "environment" ? null : "environment",
-                  );
-                }}
+                className={`env-postman-chip${state.selectedLocalCollection || state.environments.length === 0 ? " env-postman-chip--disabled" : ""}`}
+                popoverTarget="env-dropdown-popover"
+                disabled={
+                  !!state.selectedLocalCollection ||
+                  state.environments.length === 0
+                }
+                style={{ anchorName: "--env-anchor" } as React.CSSProperties}
               >
                 <span
                   className={`env-postman-dot${state.selectedEnvironmentUid ? " env-postman-dot--active" : ""}`}
@@ -1656,69 +1630,74 @@ export function RunConfigDrawer({
                 </span>
                 <ChevronDown size={14} className="env-postman-chevron" />
               </button>
-              {openDropdown === "environment" && (
-                <div className="bc-dropdown">
-                  <div className="bc-dropdown-section">
-                    <div className="bc-dropdown-header">
-                      {t("environments", { count: state.environments.length })}
-                    </div>
-                    <div
-                      className={`bc-dropdown-item ${state.selectedEnvironmentUid === null ? "bc-dropdown-item--active" : ""}`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        dispatch({ type: "SELECT_ENVIRONMENT", payload: null });
-                        setOpenDropdown(null);
-                      }}
-                      onKeyDown={activateOnKey(() => {
-                        dispatch({ type: "SELECT_ENVIRONMENT", payload: null });
-                        setOpenDropdown(null);
-                      })}
-                    >
-                      <span className="bc-dropdown-name">
-                        {t("noEnvironment")}
-                      </span>
-                      {state.selectedEnvironmentUid === null && (
-                        <span className="bc-check">
-                          <Check size={12} />
-                        </span>
-                      )}
-                    </div>
-                    {state.environments.map((env) => {
-                      const selectEnv = () => {
-                        dispatch({
-                          type: "SELECT_ENVIRONMENT",
-                          payload: env.uid,
-                        });
-                        setConfig({ envFile: null });
-                        setOpenDropdown(null);
-                      };
-                      return (
-                        <div
-                          key={env.uid}
-                          className={`bc-dropdown-item ${state.selectedEnvironmentUid === env.uid ? "bc-dropdown-item--active" : ""}`}
-                          role="button"
-                          tabIndex={0}
-                          onClick={selectEnv}
-                          onKeyDown={activateOnKey(selectEnv)}
-                        >
-                          <span className="bc-dropdown-name">{env.name}</span>
-                          {state.selectedEnvironmentUid === env.uid && (
-                            <span className="bc-check">
-                              <Check size={12} />
-                            </span>
-                          )}
-                        </div>
-                      );
+              <div
+                id="env-dropdown-popover"
+                popover="auto"
+                className="bc-dropdown bc-dropdown--anchored"
+                style={
+                  { positionAnchor: "--env-anchor" } as React.CSSProperties
+                }
+              >
+                <div className="bc-dropdown-section">
+                  <div className="bc-dropdown-header">
+                    {t("environments", { count: state.environments.length })}
+                  </div>
+                  <div
+                    className={`bc-dropdown-item ${state.selectedEnvironmentUid === null ? "bc-dropdown-item--active" : ""}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      dispatch({ type: "SELECT_ENVIRONMENT", payload: null });
+                      hideEnvDropdown();
+                    }}
+                    onKeyDown={activateOnKey(() => {
+                      dispatch({ type: "SELECT_ENVIRONMENT", payload: null });
+                      hideEnvDropdown();
                     })}
-                    {state.environments.length === 0 && (
-                      <div className="bc-dropdown-loading">
-                        {t("noEnvironments")}
-                      </div>
+                  >
+                    <span className="bc-dropdown-name">
+                      {t("noEnvironment")}
+                    </span>
+                    {state.selectedEnvironmentUid === null && (
+                      <span className="bc-check">
+                        <Check size={12} />
+                      </span>
                     )}
                   </div>
+                  {state.environments.map((env) => {
+                    const selectEnv = () => {
+                      dispatch({
+                        type: "SELECT_ENVIRONMENT",
+                        payload: env.uid,
+                      });
+                      setConfig({ envFile: null });
+                      hideEnvDropdown();
+                    };
+                    return (
+                      <div
+                        key={env.uid}
+                        className={`bc-dropdown-item ${state.selectedEnvironmentUid === env.uid ? "bc-dropdown-item--active" : ""}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={selectEnv}
+                        onKeyDown={activateOnKey(selectEnv)}
+                      >
+                        <span className="bc-dropdown-name">{env.name}</span>
+                        {state.selectedEnvironmentUid === env.uid && (
+                          <span className="bc-check">
+                            <Check size={12} />
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {state.environments.length === 0 && (
+                    <div className="bc-dropdown-loading">
+                      {t("noEnvironments")}
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           )}
           {envMode === "local" &&

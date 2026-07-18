@@ -1233,6 +1233,9 @@ async fn run_newman(
     }
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     state.running.store(true, Ordering::SeqCst);
+    // Drop the previous run's result so a run that fails before writing a new one
+    // can't make `read_newman_json` hand the frontend stale numbers.
+    *state.last_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
     // When the user ticked a subset of requests, prune the collection to just
     // those before running so both engines honour the selection.

@@ -417,21 +417,26 @@ export default function App() {
 
   useEffect(() => {
     const KEY = "api-runner-history";
+    // The native engine keeps full response bodies (newman's don't), which can
+    // blow the localStorage quota after just a couple of runs and evict older
+    // entries. Cap what gets persisted regardless of engine; the in-memory
+    // `history` used for the current session's detail view keeps full bodies.
+    const MAX_BODY = 2000;
+    const capped = history.map((e) => ({
+      ...e,
+      requestResults: e.requestResults.map((r) =>
+        r.response_body.length > MAX_BODY
+          ? { ...r, response_body: r.response_body.slice(0, MAX_BODY) }
+          : r,
+      ),
+    }));
     try {
-      localStorage.setItem(KEY, JSON.stringify(history));
+      localStorage.setItem(KEY, JSON.stringify(capped));
     } catch {
-      // Quota exceeded (response bodies make entries large). Persist a slimmed
-      // copy without bodies first; if it still doesn't fit, drop oldest entries.
-      const slim = history.map((e) => ({
-        ...e,
-        requestResults: e.requestResults.map((r) => ({
-          ...r,
-          response_body: "",
-        })),
-      }));
-      for (let keep = slim.length; keep >= 0; keep--) {
+      // Still too big (e.g. very many requests). Drop oldest entries until it fits.
+      for (let keep = capped.length; keep >= 0; keep--) {
         try {
-          localStorage.setItem(KEY, JSON.stringify(slim.slice(0, keep)));
+          localStorage.setItem(KEY, JSON.stringify(capped.slice(0, keep)));
           break;
         } catch {
           if (keep === 0) {
@@ -486,6 +491,12 @@ export default function App() {
         return n;
       });
       setPinnedIds((s) => {
+        if (!s.has(id)) return s;
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
+      setSelectedIds((s) => {
         if (!s.has(id)) return s;
         const n = new Set(s);
         n.delete(id);
@@ -761,11 +772,14 @@ export default function App() {
         );
       }
 
+      // From here on a run is genuinely being attempted (collection/env
+      // resolved) — even if the invoke below rejects, it belongs in history
+      // instead of vanishing silently, same as a runtime failure would.
+      runLaunchedRef.current = true;
       await startRun(collectionPath, {
         ...state.runConfig,
         envFile: resolvedEnvFile,
       });
-      runLaunchedRef.current = true;
     } catch (e: unknown) {
       dispatch({ type: "SET_ERROR", payload: String(e) });
       dispatch({ type: "RUN_DONE", payload: 1 });
@@ -776,6 +790,23 @@ export default function App() {
     if (state.runStatus === "done" || state.runStatus === "error") {
       if (!runLaunchedRef.current) return;
       invoke<NewmanRunResult>("read_newman_json")
+        .catch((e): NewmanRunResult => {
+          // A run that failed at the runner level leaves no result. Record it as
+          // a failed run anyway so it still shows up in history instead of
+          // silently vanishing.
+          console.error("Error reading newman JSON:", e);
+          return {
+            results: [],
+            stats: {
+              iterations: 0,
+              requests_total: 0,
+              requests_failed: 1,
+              assertions_total: 0,
+              assertions_failed: 0,
+              duration_ms: 0,
+            },
+          };
+        })
         .then(({ results, stats }) => {
           const s = stateRef.current;
           dispatch({ type: "SET_REQUEST_RESULTS", payload: results });
@@ -827,7 +858,7 @@ export default function App() {
           setSelectedRun(entry);
         })
         .catch((e) => {
-          console.error("Error reading newman JSON:", e);
+          console.error("Error recording run in history:", e);
         });
     }
   }, [state.runStatus]);
@@ -902,15 +933,15 @@ export default function App() {
 
   useEffect(() => {
     function onMouseDown(e: MouseEvent) {
-      if (selectedIds.size === 0) return;
+      if (selectedIds.size === 0 || confirmAction) return;
       const target = e.target as HTMLElement;
-      if (!target.closest(".history-list")) {
+      if (!target.closest(".history-sidebar")) {
         setSelectedIds(new Set());
       }
     }
     window.addEventListener("mousedown", onMouseDown);
     return () => window.removeEventListener("mousedown", onMouseDown);
-  }, [selectedIds]);
+  }, [selectedIds, confirmAction]);
 
   const canRun = !!(state.selectedCollection ?? state.selectedLocalCollection);
 
