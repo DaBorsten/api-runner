@@ -49,6 +49,10 @@ pub async fn run(
         cmd.arg("-e").arg(env_file);
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
 
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {

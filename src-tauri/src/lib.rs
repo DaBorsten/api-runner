@@ -477,11 +477,15 @@ async fn set_engine(app: AppHandle, engine: String) -> Result<(), String> {
 #[tauri::command]
 async fn check_newman_installed() -> bool {
     let bin = if cfg!(windows) { "newman.cmd" } else { "newman" };
-    tokio::process::Command::new(bin)
-        .arg("--version")
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("--version")
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd.status()
         .await
         .map(|s| s.success())
         .unwrap_or(false)
