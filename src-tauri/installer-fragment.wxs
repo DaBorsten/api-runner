@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Remove the old newman-runner.exe sidecar left over from installs before the
+     native Rust runner (removed in 8ab61bf). The MSI upgrade doesn't clean up
+     externalBins that no longer exist in the new version. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <ComponentGroup Id="RemoveNewmanRunner" Directory="INSTALLDIR">
+      <Component Id="RemoveNewmanRunnerExe" Guid="*">
+        <!-- RemoveFile-only components need a KeyPath; a throwaway HKCU value serves. -->
+        <RegistryValue Root="HKCU" Key="Software\com.daborsten.api-runner"
+                       Name="removeNewmanRunner" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFile Id="DeleteNewmanRunnerExe" Name="newman-runner.exe" On="install" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>
