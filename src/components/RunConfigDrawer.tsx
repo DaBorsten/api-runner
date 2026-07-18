@@ -197,8 +197,6 @@ export function RunConfigDrawer({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [dataPreviewCollapsed, setDataPreviewCollapsed] = useState(false);
   const [dataRowTotal, setDataRowTotal] = useState(0);
-  const dataRowUserChangedRef = useRef(false);
-  const dataRowUserChangedFileRef = useRef<string | null>(null);
 
   const folderReqId = useRef(0);
   const masterCheckboxRef = useRef<HTMLInputElement>(null);
@@ -445,8 +443,6 @@ export function RunConfigDrawer({
           if (!filePath) return;
           const lower = filePath.toLowerCase();
           if (!lower.endsWith(".json") && !lower.endsWith(".csv")) return;
-          dataRowUserChangedRef.current = true;
-          dataRowUserChangedFileRef.current = filePath;
           dispatch({
             type: "SET_RUN_CONFIG",
             payload: { dataFile: filePath, dataRowIndices: null },
@@ -715,25 +711,20 @@ export function RunConfigDrawer({
 
   const handleDataRowIndicesChange = useCallback(
     (next: number[] | null) => {
-      dataRowUserChangedRef.current = true;
-      dataRowUserChangedFileRef.current = cfg.dataFile;
       setConfig({ dataRowIndices: next });
     },
-    [cfg.dataFile, setConfig],
+    [setConfig],
   );
   const handleCollapseDataPreview = useCallback(
     () => setDataPreviewCollapsed(true),
     [],
   );
 
-  const [iterPopKey, setIterPopKey] = useState(0);
   const holdDecrement = useHoldRepeat(() => {
     setConfig({ iterations: Math.max(1, cfg.iterations - 1) });
-    setIterPopKey((k) => k + 1);
   });
   const holdIncrement = useHoldRepeat(() => {
     setConfig({ iterations: cfg.iterations + 1 });
-    setIterPopKey((k) => k + 1);
   });
 
   async function handleSaveApiKey() {
@@ -790,38 +781,30 @@ export function RunConfigDrawer({
     setDragging("idle");
   }
 
-  // Keep iterations in sync with the selected row count, but only when the
-  // user actively changes the row selection — not on initial load or re-run restore.
+  // Iterations track the selected data-row count, but update only when the row
+  // selection itself changes (file / picked rows / total) — never on a manual
+  // iteration edit, so a typed or +/− value sticks instead of snapping back.
+  const rowSelectionSig = cfg.dataFile
+    ? `${cfg.dataFile}|${cfg.dataRowIndices === null ? `all:${dataRowTotal}` : cfg.dataRowIndices.length}`
+    : null;
+  const prevRowSelectionSig = useRef(rowSelectionSig);
   useEffect(() => {
+    if (rowSelectionSig === prevRowSelectionSig.current) return;
+    prevRowSelectionSig.current = rowSelectionSig;
     if (!cfg.dataFile) return;
-    // dataRowIndices === null means "all rows" (fresh file pick, or a new run that
-    // reset the selection) — iterations must always reflect the total in that case,
-    // even without an explicit user edit.
-    if (!dataRowUserChangedRef.current && cfg.dataRowIndices !== null) return;
-    // The pending flag may have been left over from an edit to a different file
-    // (e.g. a rerun restored a different dataFile before the total arrived) — a
-    // stale flag must not overwrite the newly restored iterations count.
-    if (
-      dataRowUserChangedRef.current &&
-      dataRowUserChangedFileRef.current !== cfg.dataFile
-    ) {
-      dataRowUserChangedRef.current = false;
-      return;
-    }
-    // dataRowTotal may still be 0 when the file just changed but hasn't loaded yet
-    // (dataRowIndices is null in that case) — keep the flag set to retry once the
-    // total arrives. An explicit empty selection ([]) is not that case: 0 is final.
+    // Total not loaded yet (0 rows with "all" selected) — the sig changes again
+    // once it arrives, so wait rather than snapping iterations to 1.
     if (cfg.dataRowIndices === null && dataRowTotal === 0) return;
     const selectedCount =
       cfg.dataRowIndices === null ? dataRowTotal : cfg.dataRowIndices.length;
     const nextIterations = Math.max(1, selectedCount);
-    if (cfg.iterations === nextIterations) return;
-    dataRowUserChangedRef.current = false;
-    setConfig({ iterations: nextIterations });
+    if (cfg.iterations !== nextIterations)
+      setConfig({ iterations: nextIterations });
   }, [
+    rowSelectionSig,
+    cfg.dataFile,
     cfg.dataRowIndices,
     dataRowTotal,
-    cfg.dataFile,
     cfg.iterations,
     setConfig,
   ]);
@@ -860,8 +843,6 @@ export function RunConfigDrawer({
     // Reset the row selection so the new file starts with all rows selected,
     // and re-open the preview so the freshly picked rows are visible.
     if (typeof path === "string") {
-      dataRowUserChangedRef.current = true;
-      dataRowUserChangedFileRef.current = path;
       setConfig({ dataFile: path, dataRowIndices: null });
       setDataPreviewCollapsed(false);
     }
@@ -1783,21 +1764,11 @@ export function RunConfigDrawer({
               className="iter-value"
               type="text"
               inputMode="numeric"
-              key={iterPopKey}
-              defaultValue={cfg.iterations}
-              size={String(cfg.iterations).length}
+              value={cfg.iterations}
+              size={Math.max(1, String(cfg.iterations).length)}
               onChange={(e) => {
-                const digits = e.target.value.replace(/\D/g, "");
-                e.target.value = digits;
-                e.target.size = Math.max(1, digits.length);
-                const n = parseInt(digits, 10);
+                const n = parseInt(e.target.value.replace(/\D/g, ""), 10);
                 setConfig({ iterations: Number.isNaN(n) ? 1 : Math.max(1, n) });
-              }}
-              onBlur={(e) => {
-                const n = Math.max(1, cfg.iterations);
-                e.target.value = String(n);
-                e.target.size = Math.max(1, String(n).length);
-                if (n !== cfg.iterations) setConfig({ iterations: n });
               }}
             />
             <button className="iter-btn" {...holdIncrement}>
