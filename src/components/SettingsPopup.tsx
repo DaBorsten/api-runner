@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { RefreshCw, CheckCircle, XCircle, X, Download } from "lucide-react";
 import type { ThemeMode } from "../hooks/useTheme";
-
-export type RunEngine = "native" | "newman";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
 
@@ -28,8 +25,6 @@ export function SettingsPopup({
   const btnRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const langPillRef = useRef<HTMLSpanElement>(null);
   const langBtnRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const enginePillRef = useRef<HTMLSpanElement>(null);
-  const engineBtnRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const THEME_OPTIONS: { value: ThemeMode; label: string }[] = useMemo(
     () => [
@@ -48,15 +43,6 @@ export function SettingsPopup({
     [t],
   );
 
-  const ENGINE_OPTIONS: { value: RunEngine; label: string }[] = useMemo(
-    () => [
-      { value: "native", label: t("engine_native") },
-      { value: "newman", label: t("engine_newman") },
-    ],
-    [t],
-  );
-
-  const [engine, setEngineState] = useState<RunEngine>("native");
   const [version, setVersion] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
   const [statusMsg, setStatusMsg] = useState("");
@@ -77,21 +63,6 @@ export function SettingsPopup({
         console.error("Failed to get app version:", e);
       });
   }, []);
-
-  useEffect(() => {
-    invoke<string>("get_engine")
-      .then((e) => setEngineState(e === "newman" ? "newman" : "native"))
-      .catch((e) => console.error("Failed to load run engine:", e));
-  }, []);
-
-  async function handleEngineChange(next: RunEngine) {
-    setEngineState(next);
-    try {
-      await invoke("set_engine", { engine: next });
-    } catch (e) {
-      console.error("Failed to persist run engine:", e);
-    }
-  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -122,17 +93,6 @@ export function SettingsPopup({
     pill.style.width = `${btn.offsetWidth}px`;
     pill.style.transform = `translateX(${btn.offsetLeft - containerPad}px)`;
   }, [i18n.language, LANG_OPTIONS]);
-
-  // Animate engine segmented-control pill
-  useEffect(() => {
-    const idx = ENGINE_OPTIONS.findIndex((o) => o.value === engine);
-    const btn = engineBtnRefs.current[idx];
-    const pill = enginePillRef.current;
-    if (!btn || !pill) return;
-    const containerPad = 3;
-    pill.style.width = `${btn.offsetWidth}px`;
-    pill.style.transform = `translateX(${btn.offsetLeft - containerPad}px)`;
-  }, [engine, i18n.language, ENGINE_OPTIONS]);
 
   async function handleCheckForUpdates() {
     setUpdateStatus("checking");
@@ -243,34 +203,6 @@ export function SettingsPopup({
                   }}
                   className={`sp-seg-btn${i18n.language === opt.value ? " sp-seg-btn--active" : ""}`}
                   onClick={() => void i18n.changeLanguage(opt.value)}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Divider */}
-          <div className="sp-divider" />
-
-          {/* Engine row */}
-          <div className="sp-row">
-            <div className="sp-row-left">
-              <span className="sp-row-label">{t("engine")}</span>
-              <span className="sp-row-desc">
-                {engine === "newman" ? t("engineNewmanHint") : t("engineDesc")}
-              </span>
-            </div>
-            <div className="sp-seg" role="group">
-              <span className="sp-seg-pill" ref={enginePillRef} />
-              {ENGINE_OPTIONS.map((opt, i) => (
-                <button
-                  key={opt.value}
-                  ref={(el) => {
-                    engineBtnRefs.current[i] = el;
-                  }}
-                  className={`sp-seg-btn${engine === opt.value ? " sp-seg-btn--active" : ""}`}
-                  onClick={() => void handleEngineChange(opt.value)}
                 >
                   {opt.label}
                 </button>

@@ -7,7 +7,7 @@ import { ApiKeySetup } from "./components/ApiKeySetup";
 import { RunConfigDrawer } from "./components/RunConfigDrawer";
 import { RunConsole } from "./components/RunConsole";
 import { RunSummary } from "./components/RunSummary";
-import { SettingsPopup, type RunEngine } from "./components/SettingsPopup";
+import { SettingsPopup } from "./components/SettingsPopup";
 import { useNewmanRun } from "./hooks/useNewmanRun";
 import { usePostmanApi } from "./hooks/usePostmanApi";
 import { useTheme } from "./hooks/useTheme";
@@ -320,17 +320,10 @@ export default function App() {
   const [configOpen, setConfigOpen] = useState(false);
   const [configClosing, setConfigClosing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [engine, setEngine] = useState<RunEngine>("native");
   const [newmanInstalled, setNewmanInstalled] = useState<boolean | null>(null);
   const [newmanWarningOpen, setNewmanWarningOpen] = useState(false);
   const [newmanChecking, setNewmanChecking] = useState(false);
   const newmanWarningCloseBtnRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    invoke<string>("get_engine")
-      .then((e) => setEngine(e === "newman" ? "newman" : "native"))
-      .catch((e) => console.error("Failed to load run engine:", e));
-  }, [settingsOpen]);
 
   const checkNewmanInstalled = useCallback(() => {
     setNewmanChecking(true);
@@ -348,9 +341,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (engine !== "newman") return;
     checkNewmanInstalled();
-  }, [engine, checkNewmanInstalled]);
+  }, [checkNewmanInstalled]);
   const [history, setHistory] = useState<RunHistoryEntry[]>(() => {
     try {
       const stored = localStorage.getItem("api-runner-history");
@@ -417,10 +409,9 @@ export default function App() {
 
   useEffect(() => {
     const KEY = "api-runner-history";
-    // The native engine keeps full response bodies (newman's don't), which can
-    // blow the localStorage quota after just a couple of runs and evict older
-    // entries. Cap what gets persisted regardless of engine; the in-memory
-    // `history` used for the current session's detail view keeps full bodies.
+    // Cap what gets persisted so a couple of runs don't blow the localStorage
+    // quota and evict older entries; the in-memory `history` used for the
+    // current session's detail view keeps full bodies.
     const MAX_BODY = 2000;
     const capped = history.map((e) => ({
       ...e,
@@ -741,7 +732,7 @@ export default function App() {
   const runLaunchedRef = useRef(false);
 
   async function handleRun() {
-    if (engine === "newman" && newmanInstalled === false) {
+    if (newmanInstalled === false) {
       setNewmanWarningOpen(true);
       return;
     }
@@ -985,7 +976,7 @@ export default function App() {
           <Play size={14} /> API Runner
         </span>
         <div className="app-header-right">
-          {engine === "newman" && newmanInstalled !== null && (
+          {newmanInstalled !== null && (
             <span
               className={`newman-status-chip${newmanInstalled ? " newman-status-chip--ok" : " newman-status-chip--missing"}`}
               title={

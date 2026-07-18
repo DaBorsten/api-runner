@@ -263,7 +263,6 @@ struct RawRequest {
 const STORE_FILE: &str = "api-runner.bin";
 const KEY_API_KEYS: &str = "api_keys";
 const KEY_LOCAL_COLLECTIONS: &str = "local_collections";
-const KEY_ENGINE: &str = "engine";
 const KEYRING_SERVICE: &str = "com.daborsten.api-runner";
 /// Hard cap on the size of a local collection file we will read into memory.
 const MAX_COLLECTION_BYTES: u64 = 64 * 1024 * 1024;
@@ -451,29 +450,7 @@ async fn delete_api_key(app: AppHandle, id: String) -> Result<(), String> {
 
 // ── Commands: engine setting ──────────────────────────────────────────────────────
 
-/// Which run engine the user has chosen: the native Rust runner ("native",
-/// faster, no external dependency) or a globally-installed `newman` CLI
-/// ("newman", broader Postman-script compatibility). Persisted so the choice
-/// survives app restarts.
-#[tauri::command]
-async fn get_engine(app: AppHandle) -> Result<String, String> {
-    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-    Ok(store
-        .get(KEY_ENGINE)
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "native".to_string()))
-}
-
-#[tauri::command]
-async fn set_engine(app: AppHandle, engine: String) -> Result<(), String> {
-    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-    store.set(KEY_ENGINE, serde_json::Value::String(engine));
-    store.save().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Whether the global `newman` CLI is reachable on PATH, for the compatibility
-/// engine's UI status chip.
+/// Whether the global `newman` CLI is reachable on PATH, for the UI status chip.
 #[tauri::command]
 async fn check_newman_installed() -> bool {
     let bin = if cfg!(windows) { "newman.cmd" } else { "newman" };
@@ -1107,120 +1084,6 @@ async fn read_data_file(path: String) -> Result<DataPreview, String> {
     }
 }
 
-/// Parse an environment JSON file (the shape `export_environment` writes:
-/// `{"values": [{"key","value","enabled"}]}`) into a flat variable map,
-/// skipping disabled entries.
-async fn load_environment_file(path: &str) -> Result<std::collections::HashMap<String, String>, String> {
-    let content = tokio::fs::read_to_string(path).await.map_err(|e| e.to_string())?;
-    let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-    let mut map = std::collections::HashMap::new();
-    if let Some(values) = v.get("values").and_then(|v| v.as_array()) {
-        for entry in values {
-            let enabled = entry.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
-            if !enabled {
-                continue;
-            }
-            let key = entry.get("key").and_then(|k| k.as_str()).unwrap_or("").to_string();
-            if key.is_empty() {
-                continue;
-            }
-            let value = entry
-                .get("value")
-                .map(|v| match v {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                })
-                .unwrap_or_default();
-            map.insert(key, value);
-        }
-    }
-    Ok(map)
-}
-
-/// Read an iteration-data file (CSV or JSON array) into one variable map per
-/// row, honouring `indices` the same way `build_data_file` does for the old
-/// sidecar path (row filter applied first).
-async fn load_data_rows(
-    path: &str,
-    indices: Option<&[usize]>,
-) -> Result<Vec<std::collections::HashMap<String, String>>, String> {
-    let content = tokio::fs::read_to_string(path).await.map_err(|e| e.to_string())?;
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    if trimmed.starts_with('[') {
-        let rows: Vec<serde_json::Value> = serde_json::from_str(trimmed).map_err(|e| e.to_string())?;
-        let selected: Vec<&serde_json::Value> = match indices {
-            Some(idx) => idx.iter().filter_map(|&i| rows.get(i)).collect(),
-            None => rows.iter().collect(),
-        };
-        Ok(selected
-            .into_iter()
-            .map(|row| {
-                row.as_object()
-                    .map(|obj| {
-                        obj.iter()
-                            .map(|(k, v)| {
-                                let value = match v {
-                                    serde_json::Value::String(s) => s.clone(),
-                                    serde_json::Value::Null => String::new(),
-                                    other => other.to_string(),
-                                };
-                                (k.clone(), value)
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            })
-            .collect())
-    } else {
-        let records = split_csv_records(trimmed);
-        if records.is_empty() {
-            return Ok(Vec::new());
-        }
-        let headers = split_csv_fields(&records[0]);
-        let data_records = &records[1..];
-        let selected: Vec<&String> = match indices {
-            Some(idx) => idx.iter().filter_map(|&i| data_records.get(i)).collect(),
-            None => data_records.iter().collect(),
-        };
-        Ok(selected
-            .into_iter()
-            .map(|record| {
-                let fields = split_csv_fields(record);
-                headers
-                    .iter()
-                    .cloned()
-                    .zip(fields.into_iter())
-                    .collect::<std::collections::HashMap<_, _>>()
-            })
-            .collect())
-    }
-}
-
-/// Repeat/truncate `rows` to exactly `target` entries: fewer rows than target
-/// repeats the last row, more rows than target truncates. Mirrors
-/// `build_data_file`'s row-count semantics for the old sidecar path.
-fn adjust_row_count(
-    mut rows: Vec<std::collections::HashMap<String, String>>,
-    target: usize,
-) -> Vec<std::collections::HashMap<String, String>> {
-    if rows.is_empty() || target == 0 {
-        return rows;
-    }
-    if rows.len() > target {
-        rows.truncate(target);
-    } else if rows.len() < target {
-        let last = rows.last().unwrap().clone();
-        while rows.len() < target {
-            rows.push(last.clone());
-        }
-    }
-    rows
-}
-
 #[tauri::command]
 async fn run_newman(
     app: AppHandle,
@@ -1238,7 +1101,7 @@ async fn run_newman(
     *state.last_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
     // When the user ticked a subset of requests, prune the collection to just
-    // those before running so both engines honour the selection.
+    // those before running.
     let collection_path = match &payload.selected_request_ids {
         Some(ids) if !ids.is_empty() => {
             let set: std::collections::HashSet<String> = ids.iter().cloned().collect();
@@ -1247,88 +1110,31 @@ async fn run_newman(
         _ => payload.collection_path.clone(),
     };
 
-    let engine = get_engine(app.clone()).await?;
-    if engine == "newman" {
-        let app_for_task = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let state = app_for_task.state::<AppState>();
-            let report_path = match secure_temp_path(&app_for_task, "newman_report", "json") {
-                Ok(p) => p,
-                Err(e) => {
-                    let _ = app_for_task.emit("newman://output", format!("✗ {e}"));
-                    let _ = app_for_task.emit("newman://done", 1_i32);
-                    state.running.store(false, Ordering::SeqCst);
-                    return;
-                }
-            };
-            let result = runner::newman::run(
-                &app_for_task,
-                &report_path.to_string_lossy(),
-                runner::newman::NewmanArgs {
-                    collection_path: &collection_path,
-                    folder: payload.folder.as_deref(),
-                    data_file: payload.data_file.as_deref(),
-                    env_file: payload.env_file.as_deref(),
-                    iterations: payload.iterations,
-                },
-            )
-            .await;
-
-            if state.generation.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            state.running.store(false, Ordering::SeqCst);
-            match result {
-                Ok(run_result) => {
-                    *state.last_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(run_result);
-                    let _ = app_for_task.emit("newman://done", 0_i32);
-                }
-                Err(e) => {
-                    let _ = app_for_task.emit("newman://output", format!("✗ run failed: {e}"));
-                    let _ = app_for_task.emit("newman://done", 1_i32);
-                }
-            }
-        });
-        return Ok(());
-    }
-
-    let content = tokio::fs::read_to_string(&collection_path)
-        .await
-        .map_err(|e| e.to_string())?;
-    let root: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-    let mut items = runner::collection::parse_items(&root)?;
-    if let Some(folder) = &payload.folder {
-        // `folder` filters by name at any nesting level, matching the old
-        // newman `--folder` CLI flag's behaviour.
-        let folder_prefix = find_folder_prefix(&root, folder);
-        if let Some(prefix) = folder_prefix {
-            items.retain(|item| item.id == prefix || item.id.starts_with(&format!("{}/", prefix)));
-        }
-    }
-
-    let environment = match &payload.env_file {
-        Some(path) => load_environment_file(path).await?,
-        None => std::collections::HashMap::new(),
-    };
-
-    let data_rows = match &payload.data_file {
-        Some(path) => {
-            let rows = load_data_rows(path, payload.data_row_indices.as_deref()).await?;
-            Some(adjust_row_count(rows, payload.iterations as usize))
-        }
-        None => None,
-    };
-    let iterations = data_rows.as_ref().map(|r| r.len() as u64).unwrap_or(payload.iterations as u64);
-
     let app_for_task = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app_for_task.state::<AppState>();
-        let client = state.http.clone();
-        let opts = runner::events::RunOptions { items, iterations, data_rows, environment };
-        let result = runner::events::run(&app_for_task, &client, opts, &state.generation, generation).await;
+        let report_path = match secure_temp_path(&app_for_task, "newman_report", "json") {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = app_for_task.emit("newman://output", format!("✗ {e}"));
+                let _ = app_for_task.emit("newman://done", 1_i32);
+                state.running.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        let result = runner::newman::run(
+            &app_for_task,
+            &report_path.to_string_lossy(),
+            runner::newman::NewmanArgs {
+                collection_path: &collection_path,
+                folder: payload.folder.as_deref(),
+                data_file: payload.data_file.as_deref(),
+                env_file: payload.env_file.as_deref(),
+                iterations: payload.iterations,
+            },
+        )
+        .await;
 
-        // Only the still-current run gets to report; a superseded/cancelled
-        // run's late completion is discarded.
         if state.generation.load(Ordering::SeqCst) != generation {
             return;
         }
@@ -1346,34 +1152,6 @@ async fn run_newman(
     });
 
     Ok(())
-}
-
-/// Resolve a folder name to its position-based id prefix by walking the raw
-/// collection tree (name match at any depth, first match wins — same
-/// ambiguity newman's `--folder` flag has).
-fn find_folder_prefix(root: &serde_json::Value, folder_name: &str) -> Option<String> {
-    let collection = if root.get("collection").map(|c| c.is_object()).unwrap_or(false) {
-        root.get("collection")?
-    } else {
-        root
-    };
-    let items = collection.get("item")?.as_array()?;
-    find_folder_prefix_in(items, "", folder_name)
-}
-
-fn find_folder_prefix_in(items: &[serde_json::Value], prefix: &str, folder_name: &str) -> Option<String> {
-    for (idx, item) in items.iter().enumerate() {
-        let id = if prefix.is_empty() { idx.to_string() } else { format!("{}/{}", prefix, idx) };
-        if let Some(children) = item.get("item").and_then(|v| v.as_array()) {
-            if item.get("name").and_then(|n| n.as_str()) == Some(folder_name) {
-                return Some(id);
-            }
-            if let Some(found) = find_folder_prefix_in(children, &id, folder_name) {
-                return Some(found);
-            }
-        }
-    }
-    None
 }
 
 #[tauri::command]
@@ -1435,8 +1213,6 @@ pub fn run() {
             get_local_collections,
             save_local_collection,
             delete_local_collection,
-            get_engine,
-            set_engine,
             check_newman_installed,
             get_source_snapshot,
             save_source_snapshot,

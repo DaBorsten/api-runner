@@ -3993,6 +3993,9 @@ body.is-resizing * {
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--text);
+}
+.data-file-card-main:has(.data-file-card-name:hover) .data-file-card-icon-wrap {
   color: var(--accent);
 }
 .data-file-card-ext {
@@ -4035,7 +4038,7 @@ body.is-resizing * {
 }
 .data-file-card-name-icon {
   flex-shrink: 0;
-  color: var(--muted);
+  color: currentColor;
 }
 .data-file-card-name:hover .data-file-card-name-icon {
   color: var(--accent);

@@ -18,13 +18,67 @@ pub struct NewmanArgs<'a> {
     pub iterations: u32,
 }
 
+/// A drop-in replacement for newman's built-in `json` reporter that strips
+/// response bodies before serializing. The stock reporter keeps every
+/// response's raw byte stream in memory and JSON.stringify's it all in one
+/// shot at the end of the run; with enough iterations/response size that
+/// string exceeds V8's ~512MB limit and crashes with `RangeError: Invalid
+/// string length`. We never use response bodies (see `parse_report` below,
+/// which always sets `response_body` to an empty string), so this reporter
+/// drops them at the source instead.
+///
+/// Newman only loads reporters named on `-r` by `require()`-ing
+/// `newman-reporter-<name>`, so we can't just point it at an arbitrary file.
+/// Instead we materialize a fake `newman-reporter-nobody` package under a
+/// scratch dir and add that dir to `NODE_PATH`, which `require()` also
+/// searches.
+const JSON_REPORTER_SRC: &str = r#"
+module.exports = function (newman, options) {
+    newman.on('beforeDone', function (err, o) {
+        if (err || !o.summary) return;
+        const run = o.summary.run;
+        if (run && Array.isArray(run.executions)) {
+            for (const exec of run.executions) {
+                if (exec.response) {
+                    delete exec.response.stream;
+                    delete exec.response.body;
+                }
+            }
+        }
+        require('fs').writeFileSync(
+            options.export,
+            JSON.stringify({ run: run }, null, 2)
+        );
+    });
+};
+"#;
+
+const REPORTER_NAME: &str = "nobody";
+
 /// Run the collection via the global `newman` binary, streaming its stdout as
-/// `newman://output` lines, and returning the parsed `--reporter json` report.
+/// `newman://output` lines, and returning the parsed report.
 pub async fn run(
     app: &AppHandle,
     report_path: &str,
     args: NewmanArgs<'_>,
 ) -> Result<NewmanRunResult, String> {
+    let node_path_dir = std::path::Path::new(report_path)
+        .with_extension("")
+        .with_extension("reporter_modules");
+    let pkg_dir = node_path_dir.join(format!("newman-reporter-{REPORTER_NAME}"));
+    tokio::fs::create_dir_all(&pkg_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::fs::write(
+        pkg_dir.join("package.json"),
+        r#"{"name":"newman-reporter-nobody","main":"index.js"}"#,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    tokio::fs::write(pkg_dir.join("index.js"), JSON_REPORTER_SRC)
+        .await
+        .map_err(|e| e.to_string())?;
+
     let bin = if cfg!(windows) {
         "newman.cmd"
     } else {
@@ -34,8 +88,8 @@ pub async fn run(
     cmd.arg("run")
         .arg(args.collection_path)
         .arg("--reporters")
-        .arg("cli,json")
-        .arg("--reporter-json-export")
+        .arg(format!("cli,{REPORTER_NAME}"))
+        .arg(format!("--reporter-{REPORTER_NAME}-export"))
         .arg(report_path)
         .arg("-n")
         .arg(args.iterations.max(1).to_string());
@@ -48,6 +102,14 @@ pub async fn run(
     if let Some(env_file) = args.env_file {
         cmd.arg("-e").arg(env_file);
     }
+    let node_path = match std::env::var("NODE_PATH") {
+        Ok(existing) if !existing.is_empty() => {
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            format!("{}{sep}{existing}", node_path_dir.display())
+        }
+        _ => node_path_dir.display().to_string(),
+    };
+    cmd.env("NODE_PATH", node_path);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
@@ -84,6 +146,7 @@ pub async fn run(
     let status = child.wait().await.map_err(|e| e.to_string())?;
     let _ = stdout_task.await;
     let _ = stderr_task.await;
+    let _ = tokio::fs::remove_dir_all(&node_path_dir).await;
 
     if !status.success() && !std::path::Path::new(report_path).exists() {
         return Err(format!("newman exited with {status}"));
