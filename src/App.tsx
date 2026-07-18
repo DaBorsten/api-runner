@@ -1,13 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Play, Settings, Trash2, X } from "lucide-react";
+import { AlertTriangle, Play, RefreshCw, Settings, Trash2, X } from "lucide-react";
 import "./App.css";
 import { ApiKeySetup } from "./components/ApiKeySetup";
 import { RunConfigDrawer } from "./components/RunConfigDrawer";
 import { RunConsole } from "./components/RunConsole";
 import { RunSummary } from "./components/RunSummary";
-import { SettingsPopup } from "./components/SettingsPopup";
+import { SettingsPopup, type RunEngine } from "./components/SettingsPopup";
 import { useNewmanRun } from "./hooks/useNewmanRun";
 import { usePostmanApi } from "./hooks/usePostmanApi";
 import { useTheme } from "./hooks/useTheme";
@@ -320,6 +320,37 @@ export default function App() {
   const [configOpen, setConfigOpen] = useState(false);
   const [configClosing, setConfigClosing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [engine, setEngine] = useState<RunEngine>("native");
+  const [newmanInstalled, setNewmanInstalled] = useState<boolean | null>(null);
+  const [newmanWarningOpen, setNewmanWarningOpen] = useState(false);
+  const [newmanChecking, setNewmanChecking] = useState(false);
+  const newmanWarningCloseBtnRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    invoke<string>("get_engine")
+      .then((e) => setEngine(e === "newman" ? "newman" : "native"))
+      .catch((e) => console.error("Failed to load run engine:", e));
+  }, [settingsOpen]);
+
+  const checkNewmanInstalled = useCallback(() => {
+    setNewmanChecking(true);
+    const minSpin = new Promise((resolve) => setTimeout(resolve, 700));
+    Promise.allSettled([invoke<boolean>("check_newman_installed"), minSpin])
+      .then(([result]) => {
+        if (result.status === "fulfilled") {
+          setNewmanInstalled(result.value);
+        } else {
+          console.error("Failed to check newman installation:", result.reason);
+          setNewmanInstalled(false);
+        }
+      })
+      .finally(() => setNewmanChecking(false));
+  }, []);
+
+  useEffect(() => {
+    if (engine !== "newman") return;
+    checkNewmanInstalled();
+  }, [engine, checkNewmanInstalled]);
   const [history, setHistory] = useState<RunHistoryEntry[]>(() => {
     try {
       const stored = localStorage.getItem("api-runner-history");
@@ -560,6 +591,52 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [confirmAction]);
 
+  useEffect(() => {
+    const heldKeys = new Set<string>();
+    function onKeyDown(e: KeyboardEvent) {
+      const isModifier = ["Control", "Meta", "Shift", "Alt"].includes(e.key);
+      if (!isModifier) heldKeys.add(e.key.toLowerCase());
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "i" &&
+        heldKeys.size === 1
+      ) {
+        e.preventDefault();
+        setSettingsOpen(true);
+      }
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      heldKeys.delete(e.key.toLowerCase());
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!newmanWarningOpen) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setNewmanWarningOpen(false);
+      else if (e.key === "Tab") {
+        // ponytail: only focusable element in this dialog is the close button, so trap = keep it focused
+        e.preventDefault();
+        newmanWarningCloseBtnRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [newmanWarningOpen]);
+
+  useEffect(() => {
+    if (!newmanWarningOpen) return;
+    newmanWarningCloseBtnRef.current?.focus();
+  }, [newmanWarningOpen]);
+
   function renderHistoryItem(run: RunHistoryEntry) {
     return (
       <div
@@ -653,6 +730,10 @@ export default function App() {
   const runLaunchedRef = useRef(false);
 
   async function handleRun() {
+    if (engine === "newman" && newmanInstalled === false) {
+      setNewmanWarningOpen(true);
+      return;
+    }
     closeConfig();
     // Clear the previous run's output immediately so the console doesn't flash
     // stale lines during the async export step before the new run launches.
@@ -873,6 +954,27 @@ export default function App() {
           <Play size={14} /> API Runner
         </span>
         <div className="app-header-right">
+          {engine === "newman" && newmanInstalled !== null && (
+            <span
+              className={`newman-status-chip${newmanInstalled ? " newman-status-chip--ok" : " newman-status-chip--missing"}`}
+              title={
+                newmanInstalled
+                  ? t("newmanInstalled")
+                  : `${t("newmanNotInstalled")} — ${t("newmanNotInstalledTooltip")}`
+              }
+            >
+              <span className="newman-status-dot" />
+              {newmanInstalled ? t("newmanInstalled") : t("newmanNotInstalled")}
+              <button
+                className="newman-status-refresh"
+                onClick={checkNewmanInstalled}
+                disabled={newmanChecking}
+                title={t("newmanRecheck")}
+              >
+                <RefreshCw size={11} className={newmanChecking ? "spin" : undefined} />
+              </button>
+            </span>
+          )}
           <button
             className="settings-open-btn"
             onClick={() => setSettingsOpen(true)}
@@ -1125,6 +1227,33 @@ export default function App() {
                 }}
               >
                 {t("delete")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Newman missing warning */}
+      {newmanWarningOpen && (
+        <div
+          className="confirm-overlay"
+          onClick={() => setNewmanWarningOpen(false)}
+        >
+          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-message confirm-message--warning">
+              <AlertTriangle size={16} />
+              <div>
+                <strong>{t("newmanRequiredTitle")}</strong>
+                <p>{t("newmanRequiredDesc")}</p>
+              </div>
+            </div>
+            <div className="confirm-actions">
+              <button
+                ref={newmanWarningCloseBtnRef}
+                className="confirm-btn confirm-btn--cancel"
+                onClick={() => setNewmanWarningOpen(false)}
+              >
+                {t("close")}
               </button>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Minus, Search, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -21,7 +21,7 @@ const MIN_SCROLL_HEIGHT = 80;
 const MAX_SCROLL_HEIGHT = 600;
 const DEFAULT_SCROLL_HEIGHT = 240;
 
-export function DataFilePreview({
+export const DataFilePreview = memo(function DataFilePreview({
   path,
   selected,
   onChange,
@@ -288,4 +288,4 @@ export function DataFilePreview({
       </div>
     </div>
   );
-}
+});

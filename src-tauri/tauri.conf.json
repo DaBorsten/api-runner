@@ -4,9 +4,9 @@
   "version": "../package.json",
   "identifier": "com.daborsten.api-runner",
   "build": {
-    "beforeDevCommand": "bun run build:sidecar && bun run dev",
+    "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bunx license-checker --out src-tauri/THIRD_PARTY_LICENSES.txt && bun run build:sidecar && bun run build",
+    "beforeBuildCommand": "bunx license-checker --out src-tauri/THIRD_PARTY_LICENSES.txt && bun run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -39,9 +39,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": [
-      "binaries/newman-runner"
-    ],
     "resources": [
       "THIRD_PARTY_LICENSES.txt"
     ],

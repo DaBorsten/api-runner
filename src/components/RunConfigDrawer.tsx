@@ -37,6 +37,15 @@ import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 import { DataFilePreview } from "./DataFilePreview";
 import { RequestBodyViewer } from "./RequestBodyViewer";
 
+function activateOnKey(onClick: () => void) {
+  return (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  };
+}
+
 interface Props {
   state: AppState;
   dispatch: React.Dispatch<AppAction>;
@@ -704,12 +713,28 @@ export function RunConfigDrawer({
     [dispatch],
   );
 
-  const holdDecrement = useHoldRepeat(() =>
-    setConfig({ iterations: Math.max(1, cfg.iterations - 1) }),
+  const handleDataRowIndicesChange = useCallback(
+    (next: number[] | null) => {
+      dataRowUserChangedRef.current = true;
+      dataRowUserChangedFileRef.current = cfg.dataFile;
+      setConfig({ dataRowIndices: next });
+    },
+    [cfg.dataFile, setConfig],
   );
-  const holdIncrement = useHoldRepeat(() =>
-    setConfig({ iterations: cfg.iterations + 1 }),
+  const handleCollapseDataPreview = useCallback(
+    () => setDataPreviewCollapsed(true),
+    [],
   );
+
+  const [iterPopKey, setIterPopKey] = useState(0);
+  const holdDecrement = useHoldRepeat(() => {
+    setConfig({ iterations: Math.max(1, cfg.iterations - 1) });
+    setIterPopKey((k) => k + 1);
+  });
+  const holdIncrement = useHoldRepeat(() => {
+    setConfig({ iterations: cfg.iterations + 1 });
+    setIterPopKey((k) => k + 1);
+  });
 
   async function handleSaveApiKey() {
     if (!inputKey.trim()) return;
@@ -864,6 +889,37 @@ export function RunConfigDrawer({
 
   const collectionCount = state.collections.length;
 
+  const configPageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!fullPage) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Tab") return;
+      const root = configPageRef.current;
+      if (!root) return;
+      const focusable = root.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!root.contains(active)) {
+        e.preventDefault();
+        first.focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullPage]);
+
   if (!fullPage) {
     return (
       <div className="drawer-overlay" onClick={onClose}>
@@ -888,7 +944,7 @@ export function RunConfigDrawer({
   }
 
   return (
-    <div className="config-page">
+    <div className="config-page" ref={configPageRef}>
       {/* Header */}
       <div className="config-page-header">
         <div className="config-page-header-left">
@@ -953,72 +1009,90 @@ export function RunConfigDrawer({
                 count: state.apiKeys.length + state.localCollections.length,
               })}
             </div>
-            {state.apiKeys.map((k) => (
-              <div
-                key={k.id}
-                className={`bc-dropdown-item ${k.id === state.activeApiKeyId && !state.selectedLocalCollection ? "bc-dropdown-item--active" : ""}`}
-                onClick={() => {
-                  dispatch({ type: "SELECT_LOCAL_COLLECTION", payload: null });
-                  dispatch({ type: "SET_ACTIVE_API_KEY", payload: k.id });
-                  const snap = snapshots?.[k.id];
-                  if (snap && snap.workspaces.length > 0) {
-                    const wsData = snap.workspaces.map((s) => s.workspace);
-                    dispatch({ type: "SET_WORKSPACES", payload: wsData });
-                    dispatch({
-                      type: "SELECT_WORKSPACE",
-                      payload: wsData[0].id,
-                    });
-                    dispatch({
-                      type: "SET_COLLECTIONS",
-                      payload: snap.workspaces[0].collections,
-                    });
-                    dispatch({
-                      type: "SET_ENVIRONMENTS",
-                      payload: snap.workspaces[0].environments,
-                    });
-                  } else {
-                    dispatch({ type: "SET_WORKSPACES", payload: [] });
-                    dispatch({ type: "SET_COLLECTIONS", payload: [] });
-                    dispatch({ type: "SET_ENVIRONMENTS", payload: [] });
-                  }
-                  setOpenDropdown(null);
-                }}
-              >
-                <span
-                  className={`bc-dropdown-name${k.id === state.activeApiKeyId && !state.selectedLocalCollection ? " bc-dropdown-name--api-active" : ""}`}
+            {state.apiKeys.map((k) => {
+              const selectKey = () => {
+                dispatch({ type: "SELECT_LOCAL_COLLECTION", payload: null });
+                dispatch({ type: "SET_ACTIVE_API_KEY", payload: k.id });
+                const snap = snapshots?.[k.id];
+                if (snap && snap.workspaces.length > 0) {
+                  const wsData = snap.workspaces.map((s) => s.workspace);
+                  dispatch({ type: "SET_WORKSPACES", payload: wsData });
+                  dispatch({
+                    type: "SELECT_WORKSPACE",
+                    payload: wsData[0].id,
+                  });
+                  dispatch({
+                    type: "SET_COLLECTIONS",
+                    payload: snap.workspaces[0].collections,
+                  });
+                  dispatch({
+                    type: "SET_ENVIRONMENTS",
+                    payload: snap.workspaces[0].environments,
+                  });
+                } else {
+                  dispatch({ type: "SET_WORKSPACES", payload: [] });
+                  dispatch({ type: "SET_COLLECTIONS", payload: [] });
+                  dispatch({ type: "SET_ENVIRONMENTS", payload: [] });
+                }
+                setOpenDropdown(null);
+              };
+              return (
+                <div
+                  key={k.id}
+                  className={`bc-dropdown-item ${k.id === state.activeApiKeyId && !state.selectedLocalCollection ? "bc-dropdown-item--active" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={selectKey}
+                  onKeyDown={activateOnKey(selectKey)}
                 >
-                  {k.label}
-                </span>
-                <span className="source-chip source-chip--api">API</span>
-              </div>
-            ))}
-            {state.localCollections.map((col) => (
-              <div
-                key={col.id}
-                className={`bc-dropdown-item ${state.selectedLocalCollection?.id === col.id ? "bc-dropdown-item--active" : ""}`}
-                onClick={() => {
-                  dispatch({ type: "SELECT_LOCAL_COLLECTION", payload: col });
-                  setOpenDropdown(null);
-                }}
-              >
-                <span
-                  className={`bc-dropdown-name${state.selectedLocalCollection?.id === col.id ? " bc-dropdown-name--local-active" : ""}`}
+                  <span
+                    className={`bc-dropdown-name${k.id === state.activeApiKeyId && !state.selectedLocalCollection ? " bc-dropdown-name--api-active" : ""}`}
+                  >
+                    {k.label}
+                  </span>
+                  <span className="source-chip source-chip--api">API</span>
+                </div>
+              );
+            })}
+            {state.localCollections.map((col) => {
+              const selectCol = () => {
+                dispatch({ type: "SELECT_LOCAL_COLLECTION", payload: col });
+                setOpenDropdown(null);
+              };
+              return (
+                <div
+                  key={col.id}
+                  className={`bc-dropdown-item ${state.selectedLocalCollection?.id === col.id ? "bc-dropdown-item--active" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={selectCol}
+                  onKeyDown={activateOnKey(selectCol)}
                 >
-                  {col.name}
-                </span>
-                <span className="source-chip source-chip--local">
-                  {t("local")}
-                </span>
-              </div>
-            ))}
+                  <span
+                    className={`bc-dropdown-name${state.selectedLocalCollection?.id === col.id ? " bc-dropdown-name--local-active" : ""}`}
+                  >
+                    {col.name}
+                  </span>
+                  <span className="source-chip source-chip--local">
+                    {t("local")}
+                  </span>
+                </div>
+              );
+            })}
             {(state.apiKeys.length > 0 ||
               state.localCollections.length > 0) && (
               <div
                 className="bc-dropdown-manage"
+                role="button"
+                tabIndex={0}
                 onClick={() => {
                   setOpenDropdown(null);
                   setShowManageDialog(true);
                 }}
+                onKeyDown={activateOnKey(() => {
+                  setOpenDropdown(null);
+                  setShowManageDialog(true);
+                })}
               >
                 <svg
                   width="13"
@@ -1039,10 +1113,16 @@ export function RunConfigDrawer({
             )}
             <div
               className="bc-dropdown-add"
+              role="button"
+              tabIndex={0}
               onClick={() => {
                 setOpenDropdown(null);
                 setShowAddPopup(true);
               }}
+              onKeyDown={activateOnKey(() => {
+                setOpenDropdown(null);
+                setShowAddPopup(true);
+              })}
               style={{ display: "flex", alignItems: "center", gap: "6px" }}
             >
               <Plus size={13} style={{ flexShrink: 0 }} />
@@ -1072,42 +1152,48 @@ export function RunConfigDrawer({
                 <div className="bc-dropdown-header">
                   {t("workspaces", { count: state.workspaces.length })}
                 </div>
-                {state.workspaces.map((ws) => (
-                  <div
-                    key={ws.id}
-                    className={`bc-dropdown-item ${state.selectedWorkspace === ws.id ? "bc-dropdown-item--active" : ""}`}
-                    onClick={() => {
-                      dispatch({ type: "SELECT_WORKSPACE", payload: ws.id });
-                      const snap = activeKey ? snapshots?.[activeKey.id] : null;
-                      if (snap) {
-                        const wsSnap = snap.workspaces.find(
-                          (s) => s.workspace.id === ws.id,
-                        );
-                        if (wsSnap) {
-                          dispatch({
-                            type: "SET_COLLECTIONS",
-                            payload: wsSnap.collections,
-                          });
-                          dispatch({
-                            type: "SET_ENVIRONMENTS",
-                            payload: wsSnap.environments,
-                          });
-                        }
+                {state.workspaces.map((ws) => {
+                  const selectWs = () => {
+                    dispatch({ type: "SELECT_WORKSPACE", payload: ws.id });
+                    const snap = activeKey ? snapshots?.[activeKey.id] : null;
+                    if (snap) {
+                      const wsSnap = snap.workspaces.find(
+                        (s) => s.workspace.id === ws.id,
+                      );
+                      if (wsSnap) {
+                        dispatch({
+                          type: "SET_COLLECTIONS",
+                          payload: wsSnap.collections,
+                        });
+                        dispatch({
+                          type: "SET_ENVIRONMENTS",
+                          payload: wsSnap.environments,
+                        });
                       }
-                      setOpenDropdown(null);
-                    }}
-                  >
-                    <span className="bc-dropdown-name">{ws.name}</span>
-                    <span className="bc-dropdown-count">
-                      {ws.workspace_type ?? ""}
-                    </span>
-                    {state.selectedWorkspace === ws.id && (
-                      <span className="bc-check">
-                        <Check size={12} />
+                    }
+                    setOpenDropdown(null);
+                  };
+                  return (
+                    <div
+                      key={ws.id}
+                      className={`bc-dropdown-item ${state.selectedWorkspace === ws.id ? "bc-dropdown-item--active" : ""}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={selectWs}
+                      onKeyDown={activateOnKey(selectWs)}
+                    >
+                      <span className="bc-dropdown-name">{ws.name}</span>
+                      <span className="bc-dropdown-count">
+                        {ws.workspace_type ?? ""}
                       </span>
-                    )}
-                  </div>
-                ))}
+                      {state.selectedWorkspace === ws.id && (
+                        <span className="bc-check">
+                          <Check size={12} />
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </BreadcrumbChip>
 
@@ -1132,23 +1218,29 @@ export function RunConfigDrawer({
                 <div className="bc-dropdown-header">
                   {t("collections", { count: collectionCount })}
                 </div>
-                {state.collections.map((col) => (
-                  <div
-                    key={col.uid}
-                    className={`bc-dropdown-item ${state.selectedCollection?.uid === col.uid ? "bc-dropdown-item--active" : ""}`}
-                    onClick={() => {
-                      dispatch({ type: "SELECT_COLLECTION", payload: col });
-                      setOpenDropdown(null);
-                    }}
-                  >
-                    <span className="bc-dropdown-name">{col.name}</span>
-                    {state.selectedCollection?.uid === col.uid && (
-                      <span className="bc-check">
-                        <Check size={12} />
-                      </span>
-                    )}
-                  </div>
-                ))}
+                {state.collections.map((col) => {
+                  const selectCol = () => {
+                    dispatch({ type: "SELECT_COLLECTION", payload: col });
+                    setOpenDropdown(null);
+                  };
+                  return (
+                    <div
+                      key={col.uid}
+                      className={`bc-dropdown-item ${state.selectedCollection?.uid === col.uid ? "bc-dropdown-item--active" : ""}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={selectCol}
+                      onKeyDown={activateOnKey(selectCol)}
+                    >
+                      <span className="bc-dropdown-name">{col.name}</span>
+                      {state.selectedCollection?.uid === col.uid && (
+                        <span className="bc-check">
+                          <Check size={12} />
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
                 {state.collections.length === 0 && (
                   <div className="bc-dropdown-loading">
                     {t("noCollections")}
@@ -1252,12 +1344,8 @@ export function RunConfigDrawer({
           <DataFilePreview
             path={cfg.dataFile}
             selected={cfg.dataRowIndices}
-            onChange={(next) => {
-              dataRowUserChangedRef.current = true;
-              dataRowUserChangedFileRef.current = cfg.dataFile;
-              setConfig({ dataRowIndices: next });
-            }}
-            onCollapse={() => setDataPreviewCollapsed(true)}
+            onChange={handleDataRowIndicesChange}
+            onCollapse={handleCollapseDataPreview}
             onTotalChange={setDataRowTotal}
             onColumnsChange={setDataColumnCount}
           />
@@ -1595,10 +1683,16 @@ export function RunConfigDrawer({
                     </div>
                     <div
                       className={`bc-dropdown-item ${state.selectedEnvironmentUid === null ? "bc-dropdown-item--active" : ""}`}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
                         dispatch({ type: "SELECT_ENVIRONMENT", payload: null });
                         setOpenDropdown(null);
                       }}
+                      onKeyDown={activateOnKey(() => {
+                        dispatch({ type: "SELECT_ENVIRONMENT", payload: null });
+                        setOpenDropdown(null);
+                      })}
                     >
                       <span className="bc-dropdown-name">
                         {t("noEnvironment")}
@@ -1609,27 +1703,33 @@ export function RunConfigDrawer({
                         </span>
                       )}
                     </div>
-                    {state.environments.map((env) => (
-                      <div
-                        key={env.uid}
-                        className={`bc-dropdown-item ${state.selectedEnvironmentUid === env.uid ? "bc-dropdown-item--active" : ""}`}
-                        onClick={() => {
-                          dispatch({
-                            type: "SELECT_ENVIRONMENT",
-                            payload: env.uid,
-                          });
-                          setConfig({ envFile: null });
-                          setOpenDropdown(null);
-                        }}
-                      >
-                        <span className="bc-dropdown-name">{env.name}</span>
-                        {state.selectedEnvironmentUid === env.uid && (
-                          <span className="bc-check">
-                            <Check size={12} />
-                          </span>
-                        )}
-                      </div>
-                    ))}
+                    {state.environments.map((env) => {
+                      const selectEnv = () => {
+                        dispatch({
+                          type: "SELECT_ENVIRONMENT",
+                          payload: env.uid,
+                        });
+                        setConfig({ envFile: null });
+                        setOpenDropdown(null);
+                      };
+                      return (
+                        <div
+                          key={env.uid}
+                          className={`bc-dropdown-item ${state.selectedEnvironmentUid === env.uid ? "bc-dropdown-item--active" : ""}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={selectEnv}
+                          onKeyDown={activateOnKey(selectEnv)}
+                        >
+                          <span className="bc-dropdown-name">{env.name}</span>
+                          {state.selectedEnvironmentUid === env.uid && (
+                            <span className="bc-check">
+                              <Check size={12} />
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
                     {state.environments.length === 0 && (
                       <div className="bc-dropdown-loading">
                         {t("noEnvironments")}
@@ -1679,9 +1779,27 @@ export function RunConfigDrawer({
             <button className="iter-btn" {...holdDecrement}>
               −
             </button>
-            <span className="iter-value" key={cfg.iterations}>
-              {cfg.iterations}
-            </span>
+            <input
+              className="iter-value"
+              type="text"
+              inputMode="numeric"
+              key={iterPopKey}
+              defaultValue={cfg.iterations}
+              size={String(cfg.iterations).length}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, "");
+                e.target.value = digits;
+                e.target.size = Math.max(1, digits.length);
+                const n = parseInt(digits, 10);
+                setConfig({ iterations: Number.isNaN(n) ? 1 : Math.max(1, n) });
+              }}
+              onBlur={(e) => {
+                const n = Math.max(1, cfg.iterations);
+                e.target.value = String(n);
+                e.target.size = Math.max(1, String(n).length);
+                if (n !== cfg.iterations) setConfig({ iterations: n });
+              }}
+            />
             <button className="iter-btn" {...holdIncrement}>
               +
             </button>
@@ -2025,6 +2143,22 @@ function BreadcrumbChip({
       <div
         className={`bc-chip ${open ? "bc-chip--open" : ""} ${disabled ? "bc-chip--disabled" : ""}`}
         onClick={disabled ? undefined : onToggle}
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        aria-expanded={open}
+        aria-haspopup="true"
+        onKeyDown={
+          disabled
+            ? undefined
+            : (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onToggle();
+                } else if (e.key === "Escape" && open) {
+                  onClose();
+                }
+              }
+        }
         style={{ cursor: disabled ? "default" : "pointer" }}
       >
         <span className="bc-chip-label">{label}</span>
@@ -2034,16 +2168,20 @@ function BreadcrumbChip({
         {badge && (
           <span className={`bc-chip-badge ${badgeClass ?? ""}`}>{badge}</span>
         )}
-        {action && (
-          <span className="bc-chip-action" onClick={(e) => e.stopPropagation()}>
-            {action}
-          </span>
-        )}
+        {action && <span className="bc-chip-action bc-chip-action--spacer" />}
         <span className="bc-chip-arrow">
           <ChevronDown size={12} />
         </span>
       </div>
       {open && <div className="bc-dropdown">{children}</div>}
+      {action && (
+        <span
+          className="bc-chip-action bc-chip-action--overlay"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {action}
+        </span>
+      )}
     </div>
   );
 }

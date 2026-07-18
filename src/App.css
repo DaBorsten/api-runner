@@ -2269,6 +2269,7 @@ body.is-resizing * {
   border-radius: var(--radius);
   overflow: hidden;
   width: fit-content;
+  max-width: 100%;
 }
 
 .iter-btn {
@@ -2308,9 +2309,19 @@ body.is-resizing * {
   font-size: 14px;
   font-weight: 600;
   min-width: 36px;
+  max-width: 100px;
   text-align: center;
   color: var(--text);
   animation: iter-pop 0.22s ease;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.iter-value::-webkit-scrollbar {
+  display: none;
 }
 
 /* ── Result panel ─────────────────────────────────────────────────────────── */
@@ -2988,6 +2999,7 @@ body.is-resizing * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-right: 6px;
 }
 .bc-chip-value--api {
   color: #2478cc;
@@ -3039,6 +3051,13 @@ body.is-resizing * {
   display: flex;
   align-items: center;
   margin-left: 2px;
+}
+
+.bc-chip-action--overlay {
+  position: absolute;
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .bc-chip-sync-btn {
@@ -4195,6 +4214,85 @@ body.is-resizing * {
 .env-local-pick-btn:hover {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
+/* ── Newman status chip ───────────────────────────────────────────────────── */
+.newman-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  cursor: default;
+}
+.newman-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.newman-status-chip--ok {
+  color: #16a34a;
+  border-color: color-mix(in srgb, #16a34a 35%, var(--border));
+  background: color-mix(in srgb, #16a34a 10%, transparent);
+}
+.newman-status-chip--ok .newman-status-dot {
+  background: #16a34a;
+}
+.newman-status-chip--missing {
+  color: #dc2626;
+  border-color: color-mix(in srgb, #dc2626 35%, var(--border));
+  background: color-mix(in srgb, #dc2626 10%, transparent);
+}
+.newman-status-chip--missing .newman-status-dot {
+  background: #dc2626;
+}
+.newman-status-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.newman-status-refresh:hover {
+  opacity: 1;
+}
+.newman-status-refresh:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.newman-status-refresh .spin {
+  animation: newman-spin 0.7s linear infinite;
+}
+@keyframes newman-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.confirm-message--warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: #dc2626;
+}
+.confirm-message--warning svg {
+  flex-shrink: 0;
+}
+.confirm-message--warning strong {
+  display: block;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.confirm-message--warning p {
+  color: var(--text-muted, #64748b);
+  font-weight: 400;
 }
 
 /* ── Settings Open Button ───────────────────────────────────────────────────── */

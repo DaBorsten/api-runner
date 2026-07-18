@@ -9,7 +9,6 @@
     "preview": "vite preview",
     "lint": "biome lint .",
     "tauri": "tauri",
-    "build:sidecar": "bun run scripts/build-sidecar.ts",
     "bump": "bun scripts/bump.ts"
   },
   "dependencies": {
@@ -17,7 +16,6 @@
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-shell": "^2.3.5",
     "@tauri-apps/plugin-store": "^2.4.3",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@types/node": "^26.0.1",
@@ -36,9 +34,6 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
-    "browserify": "^17.0.1",
-    "newman": "^6.2.2",
-    "terser": "^5.49.0",
     "typescript": "~7.0.2",
     "vite": "^8.1.3"
   }

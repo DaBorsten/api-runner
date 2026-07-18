@@ -4,33 +4,24 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Emitter, Manager, State, Theme};
-use tauri_plugin_shell::ShellExt;
 use tauri_plugin_store::StoreExt;
-use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
-/// Sidecar program name. `bundle.externalBin` declares it as
-/// `binaries/newman-runner-<triple>`, but Tauri copies it next to the app
-/// executable flattened to `newman-runner(.exe)`, and the shell plugin resolves
-/// sidecars relative to that directory — so we reference it by basename.
-const SIDECAR: &str = "newman-runner";
-/// Marks a structured control line emitted by the sidecar on stdout; must match
-/// the `CTRL` constant in `src-tauri/sidecar/newman-runner.ts`.
-const CTRL_PREFIX: &str = "__NEWMAN_RUNNER__";
+mod runner;
+pub use runner::report::{NewmanRunResult, RequestResult, RunStats};
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 pub struct AppState {
-    /// The long-lived newman sidecar, kept warm so each run avoids the
-    /// `cmd.exe` + Node bootstrap cost the old `cmd /c newman` path paid.
-    pub sidecar: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
-    pub last_json_report: Mutex<Option<String>>,
-    /// Whether a run is currently in flight in the sidecar.
+    /// Whether a run is currently in flight.
     pub running: AtomicBool,
-    /// Bumped whenever the active sidecar is replaced. A listener task compares
-    /// its own generation against this to tell an intentional swap (cancel /
-    /// supersede) from an unexpected crash.
+    /// Bumped whenever a run is superseded/cancelled. The in-flight run task
+    /// compares its own generation against this after each request to know
+    /// whether to keep going or stop early.
     pub generation: AtomicU64,
+    /// Result of the most recently completed run, so `read_newman_json` can
+    /// hand it to the frontend after `run_newman` returns.
+    pub last_result: Mutex<Option<NewmanRunResult>>,
     /// Shared HTTP client — reused across requests for connection pooling.
     pub http: reqwest::Client,
 }
@@ -100,17 +91,6 @@ pub struct NewmanPayload {
 pub struct DataPreview {
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RequestResult {
-    pub name: String,
-    pub method: String,
-    pub url: String,
-    pub status: u16,
-    pub response_time: u64,
-    pub response_body: String,
-    pub iteration: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -283,6 +263,7 @@ struct RawRequest {
 const STORE_FILE: &str = "api-runner.bin";
 const KEY_API_KEYS: &str = "api_keys";
 const KEY_LOCAL_COLLECTIONS: &str = "local_collections";
+const KEY_ENGINE: &str = "engine";
 const KEYRING_SERVICE: &str = "com.daborsten.api-runner";
 /// Hard cap on the size of a local collection file we will read into memory.
 const MAX_COLLECTION_BYTES: u64 = 64 * 1024 * 1024;
@@ -466,6 +447,44 @@ async fn delete_api_key(app: AppHandle, id: String) -> Result<(), String> {
     );
     store.save().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ── Commands: engine setting ──────────────────────────────────────────────────────
+
+/// Which run engine the user has chosen: the native Rust runner ("native",
+/// faster, no external dependency) or a globally-installed `newman` CLI
+/// ("newman", broader Postman-script compatibility). Persisted so the choice
+/// survives app restarts.
+#[tauri::command]
+async fn get_engine(app: AppHandle) -> Result<String, String> {
+    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
+    Ok(store
+        .get(KEY_ENGINE)
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "native".to_string()))
+}
+
+#[tauri::command]
+async fn set_engine(app: AppHandle, engine: String) -> Result<(), String> {
+    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
+    store.set(KEY_ENGINE, serde_json::Value::String(engine));
+    store.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Whether the global `newman` CLI is reachable on PATH, for the compatibility
+/// engine's UI status chip.
+#[tauri::command]
+async fn check_newman_installed() -> bool {
+    let bin = if cfg!(windows) { "newman.cmd" } else { "newman" };
+    tokio::process::Command::new(bin)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 // ── Commands: local collections ──────────────────────────────────────────────────
@@ -963,99 +982,14 @@ async fn export_collection(
     Ok(tmp_path.to_string_lossy().to_string())
 }
 
-/// Spawn the newman sidecar and attach a listener that translates its stdout
-/// into `newman://output` / `newman://done` events. Stores the child in state
-/// so `run_newman` can write commands to its stdin. Safe to call repeatedly;
-/// each call supersedes the previous child via the generation counter.
-fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    // This child's generation: also becomes the "current" one.
-    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-
-    let (mut rx, child) = app
-        .shell()
-        .sidecar(SIDECAR)
-        .map_err(|e| e.to_string())?
-        .spawn()
-        .map_err(|e| e.to_string())?;
-
-    *state.sidecar.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
-    state.running.store(false, Ordering::SeqCst);
-
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        use tauri_plugin_shell::process::CommandEvent;
-        while let Some(event) = rx.recv().await {
-            match event {
-                CommandEvent::Stdout(bytes) => {
-                    let line = String::from_utf8_lossy(&bytes);
-                    let line = line.trim_end_matches(['\r', '\n']);
-                    if let Some(rest) = line.strip_prefix(CTRL_PREFIX) {
-                        handle_control(&app, rest);
-                    } else {
-                        let _ = app.emit("newman://output", line.to_string());
-                    }
-                }
-                CommandEvent::Stderr(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    let text = text.trim_end_matches(['\r', '\n']);
-                    let _ = app.emit("newman://output", format!("[stderr] {}", text));
-                }
-                CommandEvent::Terminated(_) => {
-                    let state = app.state::<AppState>();
-                    // React only if we are still the active sidecar; otherwise a
-                    // newer one already replaced us (cancel / supersede) and owns
-                    // recovery.
-                    if state.generation.load(Ordering::SeqCst) == generation {
-                        if state.running.swap(false, Ordering::SeqCst) {
-                            // Unexpected exit mid-run — unblock the UI.
-                            let _ = app.emit("newman://done", -1_i32);
-                        }
-                        let _ = spawn_sidecar(&app); // crash recovery
-                    }
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
-
-    Ok(())
-}
-
-/// Handle a `__NEWMAN_RUNNER__`-prefixed control line from the sidecar.
-fn handle_control(app: &AppHandle, json: &str) {
-    let v: serde_json::Value = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let state = app.state::<AppState>();
-    match v.get("type").and_then(|t| t.as_str()) {
-        Some("ready") => {}
-        Some("done") => {
-            let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(0) as i32;
-            state.running.store(false, Ordering::SeqCst);
-            let _ = app.emit("newman://done", code);
-        }
-        _ => {}
-    }
-}
-
-/// Kill the current sidecar (if any) and bump the generation so its listener
-/// stays quiet on the resulting `Terminated` event. Callers respawn afterwards.
-fn kill_current(state: &AppState) {
+/// Bump the generation so an in-flight run's task notices (via
+/// `generation.load() != my_generation`) and stops emitting/looping, then
+/// mark not-running. Callers use this both for `cancel_newman` and to
+/// supersede a run that's still in flight when a new one starts.
+fn stop_current(state: &AppState) {
     state.generation.fetch_add(1, Ordering::SeqCst);
-    if let Some(child) = state
-        .sidecar
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .take()
-    {
-        let _ = child.kill();
-    }
     state.running.store(false, Ordering::SeqCst);
 }
-
 
 /// Split CSV content into records, honouring RFC-4180 quoted fields that may
 /// contain embedded newlines.
@@ -1169,93 +1103,118 @@ async fn read_data_file(path: String) -> Result<DataPreview, String> {
     }
 }
 
-/// Expand an iteration-data file by repeating its rows `iterations` times.
-/// Streams directly to disk to avoid materialising the whole expanded payload
-/// in memory. Returns the path of the user-private temp file.
-/// Build a data file with exactly `target` rows.
-/// - target < selected rows → use only the first `target` rows
-/// - target > selected rows → use all rows, then repeat the last row until `target` is reached
-/// - indices filter applied before the target adjustment
-async fn build_data_file(
-    app: &AppHandle,
+/// Parse an environment JSON file (the shape `export_environment` writes:
+/// `{"values": [{"key","value","enabled"}]}`) into a flat variable map,
+/// skipping disabled entries.
+async fn load_environment_file(path: &str) -> Result<std::collections::HashMap<String, String>, String> {
+    let content = tokio::fs::read_to_string(path).await.map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let mut map = std::collections::HashMap::new();
+    if let Some(values) = v.get("values").and_then(|v| v.as_array()) {
+        for entry in values {
+            let enabled = entry.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
+            if !enabled {
+                continue;
+            }
+            let key = entry.get("key").and_then(|k| k.as_str()).unwrap_or("").to_string();
+            if key.is_empty() {
+                continue;
+            }
+            let value = entry
+                .get("value")
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .unwrap_or_default();
+            map.insert(key, value);
+        }
+    }
+    Ok(map)
+}
+
+/// Read an iteration-data file (CSV or JSON array) into one variable map per
+/// row, honouring `indices` the same way `build_data_file` does for the old
+/// sidecar path (row filter applied first).
+async fn load_data_rows(
     path: &str,
-    target: usize,
     indices: Option<&[usize]>,
-) -> Result<String, String> {
-    if target == 0 {
-        return Ok(path.to_string());
+) -> Result<Vec<std::collections::HashMap<String, String>>, String> {
+    let content = tokio::fs::read_to_string(path).await.map_err(|e| e.to_string())?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
     }
 
-    let content = tokio::fs::read_to_string(path)
-        .await
-        .map_err(|e| e.to_string())?;
-    let trimmed = content.trim();
-
     if trimmed.starts_with('[') {
-        let rows: Vec<serde_json::Value> =
-            serde_json::from_str(trimmed).map_err(|e| e.to_string())?;
+        let rows: Vec<serde_json::Value> = serde_json::from_str(trimmed).map_err(|e| e.to_string())?;
         let selected: Vec<&serde_json::Value> = match indices {
             Some(idx) => idx.iter().filter_map(|&i| rows.get(i)).collect(),
             None => rows.iter().collect(),
         };
-        if selected.is_empty() {
-            return Ok(path.to_string());
-        }
-        // Skip writing a temp file when no transformation is needed.
-        if indices.is_none() && target == selected.len() {
-            return Ok(path.to_string());
-        }
-        let last = *selected.last().unwrap();
-        let out_path = secure_temp_path(app, "newman_data", "json")?;
-        let file = tokio::fs::File::create(&out_path)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut w = tokio::io::BufWriter::new(file);
-        w.write_all(b"[").await.map_err(|e| e.to_string())?;
-        for i in 0..target {
-            if i > 0 {
-                w.write_all(b",").await.map_err(|e| e.to_string())?;
-            }
-            let row = selected.get(i).copied().unwrap_or(last);
-            let s = serde_json::to_string(row).map_err(|e| e.to_string())?;
-            w.write_all(s.as_bytes()).await.map_err(|e| e.to_string())?;
-        }
-        w.write_all(b"]").await.map_err(|e| e.to_string())?;
-        w.flush().await.map_err(|e| e.to_string())?;
-        Ok(out_path.to_string_lossy().to_string())
+        Ok(selected
+            .into_iter()
+            .map(|row| {
+                row.as_object()
+                    .map(|obj| {
+                        obj.iter()
+                            .map(|(k, v)| {
+                                let value = match v {
+                                    serde_json::Value::String(s) => s.clone(),
+                                    serde_json::Value::Null => String::new(),
+                                    other => other.to_string(),
+                                };
+                                (k.clone(), value)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect())
     } else {
         let records = split_csv_records(trimmed);
         if records.is_empty() {
-            return Ok(path.to_string());
+            return Ok(Vec::new());
         }
+        let headers = split_csv_fields(&records[0]);
         let data_records = &records[1..];
         let selected: Vec<&String> = match indices {
             Some(idx) => idx.iter().filter_map(|&i| data_records.get(i)).collect(),
             None => data_records.iter().collect(),
         };
-        if selected.is_empty() {
-            return Ok(path.to_string());
-        }
-        if indices.is_none() && target == selected.len() {
-            return Ok(path.to_string());
-        }
-        let last = *selected.last().unwrap();
-        let out_path = secure_temp_path(app, "newman_data", "csv")?;
-        let file = tokio::fs::File::create(&out_path)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut w = tokio::io::BufWriter::new(file);
-        w.write_all(records[0].as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
-        for i in 0..target {
-            w.write_all(b"\n").await.map_err(|e| e.to_string())?;
-            let row = selected.get(i).copied().unwrap_or(last);
-            w.write_all(row.as_bytes()).await.map_err(|e| e.to_string())?;
-        }
-        w.flush().await.map_err(|e| e.to_string())?;
-        Ok(out_path.to_string_lossy().to_string())
+        Ok(selected
+            .into_iter()
+            .map(|record| {
+                let fields = split_csv_fields(record);
+                headers
+                    .iter()
+                    .cloned()
+                    .zip(fields.into_iter())
+                    .collect::<std::collections::HashMap<_, _>>()
+            })
+            .collect())
     }
+}
+
+/// Repeat/truncate `rows` to exactly `target` entries: fewer rows than target
+/// repeats the last row, more rows than target truncates. Mirrors
+/// `build_data_file`'s row-count semantics for the old sidecar path.
+fn adjust_row_count(
+    mut rows: Vec<std::collections::HashMap<String, String>>,
+    target: usize,
+) -> Vec<std::collections::HashMap<String, String>> {
+    if rows.is_empty() || target == 0 {
+        return rows;
+    }
+    if rows.len() > target {
+        rows.truncate(target);
+    } else if rows.len() < target {
+        let last = rows.last().unwrap().clone();
+        while rows.len() < target {
+            rows.push(last.clone());
+        }
+    }
+    rows
 }
 
 #[tauri::command]
@@ -1264,8 +1223,15 @@ async fn run_newman(
     state: State<'_, AppState>,
     payload: NewmanPayload,
 ) -> Result<(), String> {
+    // If a previous run is still in flight, supersede it.
+    if state.running.load(Ordering::SeqCst) {
+        stop_current(&state);
+    }
+    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    state.running.store(true, Ordering::SeqCst);
+
     // When the user ticked a subset of requests, prune the collection to just
-    // those before running so newman only executes the selected requests.
+    // those before running so both engines honour the selection.
     let collection_path = match &payload.selected_request_ids {
         Some(ids) if !ids.is_empty() => {
             let set: std::collections::HashSet<String> = ids.iter().cloned().collect();
@@ -1274,187 +1240,143 @@ async fn run_newman(
         _ => payload.collection_path.clone(),
     };
 
-    // Build the effective data file: applies row filtering and adjusts to the
-    // requested iteration count (truncate or repeat-last-row as needed).
-    let data_file = match &payload.data_file {
-        Some(data) => Some(
-            build_data_file(&app, data, payload.iterations as usize, payload.data_row_indices.as_deref()).await?
-        ),
-        None => None,
+    let engine = get_engine(app.clone()).await?;
+    if engine == "newman" {
+        let app_for_task = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app_for_task.state::<AppState>();
+            let report_path = match secure_temp_path(&app_for_task, "newman_report", "json") {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = app_for_task.emit("newman://output", format!("✗ {e}"));
+                    let _ = app_for_task.emit("newman://done", 1_i32);
+                    state.running.store(false, Ordering::SeqCst);
+                    return;
+                }
+            };
+            let result = runner::newman::run(
+                &app_for_task,
+                &report_path.to_string_lossy(),
+                runner::newman::NewmanArgs {
+                    collection_path: &collection_path,
+                    folder: payload.folder.as_deref(),
+                    data_file: payload.data_file.as_deref(),
+                    env_file: payload.env_file.as_deref(),
+                    iterations: payload.iterations,
+                },
+            )
+            .await;
+
+            if state.generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            state.running.store(false, Ordering::SeqCst);
+            match result {
+                Ok(run_result) => {
+                    *state.last_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(run_result);
+                    let _ = app_for_task.emit("newman://done", 0_i32);
+                }
+                Err(e) => {
+                    let _ = app_for_task.emit("newman://output", format!("✗ run failed: {e}"));
+                    let _ = app_for_task.emit("newman://done", 1_i32);
+                }
+            }
+        });
+        return Ok(());
+    }
+
+    let content = tokio::fs::read_to_string(&collection_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let root: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let mut items = runner::collection::parse_items(&root)?;
+    if let Some(folder) = &payload.folder {
+        // `folder` filters by name at any nesting level, matching the old
+        // newman `--folder` CLI flag's behaviour.
+        let folder_prefix = find_folder_prefix(&root, folder);
+        if let Some(prefix) = folder_prefix {
+            items.retain(|item| item.id == prefix || item.id.starts_with(&format!("{}/", prefix)));
+        }
+    }
+
+    let environment = match &payload.env_file {
+        Some(path) => load_environment_file(path).await?,
+        None => std::collections::HashMap::new(),
     };
 
-    let report_path = secure_temp_path(&app, "newman_report", "json")?;
-    let json_report_path = report_path.to_string_lossy().to_string();
+    let data_rows = match &payload.data_file {
+        Some(path) => {
+            let rows = load_data_rows(path, payload.data_row_indices.as_deref()).await?;
+            Some(adjust_row_count(rows, payload.iterations as usize))
+        }
+        None => None,
+    };
+    let iterations = data_rows.as_ref().map(|r| r.len() as u64).unwrap_or(payload.iterations as u64);
 
-    // If a previous run is still in flight, supersede it: kill + respawn a fresh
-    // warm sidecar (mirrors the old behaviour of killing the previous process).
-    if state.running.load(Ordering::SeqCst) {
-        kill_current(&state);
-        spawn_sidecar(&app)?;
-    }
+    let app_for_task = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app_for_task.state::<AppState>();
+        let client = state.http.clone();
+        let opts = runner::events::RunOptions { items, iterations, data_rows, environment };
+        let result = runner::events::run(&app_for_task, &client, opts, &state.generation, generation).await;
 
-    // The sidecar applies the same arg logic as the old CLI invocation: a data
-    // file drives iterations, so `iterations` only matters without one.
-    let command = serde_json::json!({
-        "cmd": "run",
-        "collectionPath": collection_path,
-        "folder": payload.folder,
-        "dataFile": data_file,
-        "envFile": payload.env_file,
-        "iterations": payload.iterations,
-        "reportPath": json_report_path,
+        // Only the still-current run gets to report; a superseded/cancelled
+        // run's late completion is discarded.
+        if state.generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        state.running.store(false, Ordering::SeqCst);
+        match result {
+            Ok(run_result) => {
+                *state.last_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(run_result);
+                let _ = app_for_task.emit("newman://done", 0_i32);
+            }
+            Err(e) => {
+                let _ = app_for_task.emit("newman://output", format!("✗ run failed: {e}"));
+                let _ = app_for_task.emit("newman://done", 1_i32);
+            }
+        }
     });
-    let mut line = serde_json::to_string(&command).map_err(|e| e.to_string())?;
-    line.push('\n');
-
-    {
-        let mut guard = state.sidecar.lock().unwrap_or_else(|e| e.into_inner());
-        let child = guard.as_mut().ok_or("newman sidecar is not running")?;
-        child.write(line.as_bytes()).map_err(|e| e.to_string())?;
-    }
-
-    state.running.store(true, Ordering::SeqCst);
-    *state
-        .last_json_report
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some(json_report_path);
 
     Ok(())
 }
 
-/// Aggregate run statistics, read straight from newman's JSON report (`run.stats`
-/// and `run.timings`) rather than scraped from the human-readable CLI table.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RunStats {
-    pub iterations: u64,
-    pub requests_total: u64,
-    pub requests_failed: u64,
-    pub assertions_total: u64,
-    pub assertions_failed: u64,
-    pub duration_ms: u64,
+/// Resolve a folder name to its position-based id prefix by walking the raw
+/// collection tree (name match at any depth, first match wins — same
+/// ambiguity newman's `--folder` flag has).
+fn find_folder_prefix(root: &serde_json::Value, folder_name: &str) -> Option<String> {
+    let collection = if root.get("collection").map(|c| c.is_object()).unwrap_or(false) {
+        root.get("collection")?
+    } else {
+        root
+    };
+    let items = collection.get("item")?.as_array()?;
+    find_folder_prefix_in(items, "", folder_name)
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct NewmanRunResult {
-    pub results: Vec<RequestResult>,
-    pub stats: RunStats,
+fn find_folder_prefix_in(items: &[serde_json::Value], prefix: &str, folder_name: &str) -> Option<String> {
+    for (idx, item) in items.iter().enumerate() {
+        let id = if prefix.is_empty() { idx.to_string() } else { format!("{}/{}", prefix, idx) };
+        if let Some(children) = item.get("item").and_then(|v| v.as_array()) {
+            if item.get("name").and_then(|n| n.as_str()) == Some(folder_name) {
+                return Some(id);
+            }
+            if let Some(found) = find_folder_prefix_in(children, &id, folder_name) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 #[tauri::command]
 async fn read_newman_json(state: State<'_, AppState>) -> Result<NewmanRunResult, String> {
-    let path = state
-        .last_json_report
+    state
+        .last_result
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
-        .ok_or("No JSON report available")?;
-
-    let content = tokio::fs::read_to_string(&path)
-        .await
-        .map_err(|e| e.to_string())?;
-    let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-
-    let mut results: Vec<RequestResult> = Vec::new();
-
-    if let Some(runs) = v
-        .get("run")
-        .and_then(|r| r.get("executions"))
-        .and_then(|e| e.as_array())
-    {
-        for (idx, exec) in runs.iter().enumerate() {
-            let item = exec.get("item");
-            let name = item
-                .and_then(|i| i.get("name"))
-                .and_then(|n| n.as_str())
-                .unwrap_or("Unknown")
-                .to_string();
-
-            let request = exec.get("request");
-            let method = request
-                .and_then(|r| r.get("method"))
-                .and_then(|m| m.as_str())
-                .unwrap_or("GET")
-                .to_string();
-            let url = request
-                .and_then(|r| r.get("url"))
-                .and_then(|u| u.get("raw").or(Some(u)))
-                .and_then(|u| u.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let response = exec.get("response");
-            let status = response
-                .and_then(|r| r.get("code"))
-                .and_then(|c| c.as_u64())
-                .unwrap_or(0) as u16;
-            let response_time = response
-                .and_then(|r| r.get("responseTime"))
-                .and_then(|t| t.as_u64())
-                .unwrap_or(0);
-            let response_body = response
-                .and_then(|r| r.get("stream"))
-                .and_then(|s| {
-                    // Newman serializes stream as {"type":"Buffer","data":[...]}
-                    let arr = s
-                        .get("data")
-                        .and_then(|d| d.as_array())
-                        .or_else(|| s.as_array());
-                    arr.and_then(|arr| {
-                        let bytes: Vec<u8> = arr
-                            .iter()
-                            .filter_map(|b| b.as_u64().map(|v| v as u8))
-                            .collect();
-                        String::from_utf8(bytes).ok()
-                    })
-                })
-                .unwrap_or_default();
-
-            let iteration = exec
-                .get("cursor")
-                .and_then(|c| c.get("iteration"))
-                .and_then(|i| i.as_u64())
-                .unwrap_or(idx as u64) as usize;
-
-            results.push(RequestResult {
-                name,
-                method,
-                url,
-                status,
-                response_time,
-                response_body,
-                iteration,
-            });
-        }
-    }
-
-    // Authoritative counts come from `run.stats`; the CLI table is for humans.
-    let stat = |group: &str, field: &str| -> u64 {
-        v.get("run")
-            .and_then(|r| r.get("stats"))
-            .and_then(|s| s.get(group))
-            .and_then(|g| g.get(field))
-            .and_then(|n| n.as_u64())
-            .unwrap_or(0)
-    };
-    let timing = |field: &str| -> f64 {
-        v.get("run")
-            .and_then(|r| r.get("timings"))
-            .and_then(|t| t.get(field))
-            .and_then(|n| n.as_f64())
-            .unwrap_or(0.0)
-    };
-    let duration_ms = (timing("completed") - timing("started")).max(0.0).round() as u64;
-
-    let stats = RunStats {
-        iterations: stat("iterations", "total"),
-        requests_total: stat("requests", "total"),
-        requests_failed: stat("requests", "failed"),
-        assertions_total: stat("assertions", "total"),
-        assertions_failed: stat("assertions", "failed"),
-        duration_ms,
-    };
-
-    Ok(NewmanRunResult { results, stats })
+        .ok_or_else(|| "No run result available".to_string())
 }
 
 #[tauri::command]
@@ -1469,13 +1391,11 @@ fn set_window_theme(app: AppHandle, theme: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn cancel_newman(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    // newman's programmatic API exposes no clean abort, so we stop a run by
-    // killing the sidecar and immediately respawning a fresh warm one. The
-    // outgoing listener stays quiet (generation bump) and the frontend drives
-    // its own cancel UI, so no `newman://done` is emitted here.
-    kill_current(&state);
-    spawn_sidecar(&app)?;
+async fn cancel_newman(state: State<'_, AppState>) -> Result<(), String> {
+    // Bumps the generation counter so the in-flight run task's `events::run`
+    // loop notices between requests and stops; the frontend drives its own
+    // cancel UI, so no `newman://done` is emitted here.
+    stop_current(&state);
     Ok(())
 }
 
@@ -1490,22 +1410,15 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState {
-            sidecar: Mutex::new(None),
-            last_json_report: Mutex::new(None),
             running: AtomicBool::new(false),
             generation: AtomicU64::new(0),
+            last_result: Mutex::new(None),
             http,
-        })
-        .setup(|app| {
-            // Bring the newman sidecar up at launch so the first run is warm.
-            spawn_sidecar(app.handle())?;
-            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_api_keys,
@@ -1515,6 +1428,9 @@ pub fn run() {
             get_local_collections,
             save_local_collection,
             delete_local_collection,
+            get_engine,
+            set_engine,
+            check_newman_installed,
             get_source_snapshot,
             save_source_snapshot,
             fetch_workspaces,
@@ -1532,11 +1448,5 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|app_handle, event| {
-            // Kill the warm sidecar on exit so it doesn't linger as an orphan
-            // (which would also lock its exe against the next build).
-            if let tauri::RunEvent::Exit = event {
-                kill_current(&app_handle.state::<AppState>());
-            }
-        });
+        .run(|_app_handle, _event| {});
 }

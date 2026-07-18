@@ -19,7 +19,13 @@
       "Read(//c/Users/DaBorsten/Projekte/Copilot-Plan-Exporter/**)",
       "mcp__plugin_context-mode_context-mode__ctx_search",
       "Bash(ls -la \"C:\\\\Users\\\\DaBorsten\\\\.claude\\\\plans\\\\\" 2>/dev/null || echo \"Plans directory does not exist yet\")",
-      "Read(//c/Users/DaBorsten/.claude/plans\" 2>/dev/**)"
+      "Read(//c/Users/DaBorsten/.claude/plans\" 2>/dev/**)",
+      "Bash(cat >> *)",
+      "Bash(cargo --version)",
+      "Bash(cargo search *)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\DaBorsten\\.claude\\plans"
     ]
   }
 }
