@@ -909,6 +909,65 @@ async fn write_filtered_collection(
     Ok(tmp_path.to_string_lossy().to_string())
 }
 
+/// Read the data file at `data_file_path`, keep only the rows at `selected`
+/// (0-based, matching the order `read_data_file`/`expand_data_file` produce),
+/// and write the result to a fresh temp file in the same format (CSV or JSON).
+/// Returns the temp file path so the caller can hand it to newman in place of
+/// the original data file.
+async fn write_filtered_data_file(
+    app: &AppHandle,
+    data_file_path: &str,
+    selected: &[usize],
+) -> Result<String, String> {
+    let content = tokio::fs::read_to_string(data_file_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let trimmed = content.trim();
+
+    let mut indices: Vec<usize> = selected.to_vec();
+    indices.sort_unstable();
+    indices.dedup();
+
+    if trimmed.starts_with('[') {
+        let values: Vec<serde_json::Value> =
+            serde_json::from_str(trimmed).map_err(|e| e.to_string())?;
+        let kept: Vec<serde_json::Value> = indices
+            .into_iter()
+            .filter_map(|i| values.get(i).cloned())
+            .collect();
+        let tmp_path = secure_temp_path(app, "data_filtered", "json")?;
+        tokio::fs::write(
+            &tmp_path,
+            serde_json::to_string(&kept).map_err(|e| e.to_string())?,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(tmp_path.to_string_lossy().to_string())
+    } else {
+        let records = split_csv_records(trimmed);
+        if records.is_empty() {
+            let tmp_path = secure_temp_path(app, "data_filtered", "csv")?;
+            tokio::fs::write(&tmp_path, "")
+                .await
+                .map_err(|e| e.to_string())?;
+            return Ok(tmp_path.to_string_lossy().to_string());
+        }
+        let header = &records[0];
+        let rows = &records[1..];
+        let mut out_lines: Vec<&str> = vec![header.as_str()];
+        for i in indices {
+            if let Some(row) = rows.get(i) {
+                out_lines.push(row.as_str());
+            }
+        }
+        let tmp_path = secure_temp_path(app, "data_filtered", "csv")?;
+        tokio::fs::write(&tmp_path, out_lines.join("\n"))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(tmp_path.to_string_lossy().to_string())
+    }
+}
+
 #[tauri::command]
 async fn fetch_collection_detail(
     state: State<'_, AppState>,
@@ -1110,6 +1169,16 @@ async fn run_newman(
         _ => payload.collection_path.clone(),
     };
 
+    // When the user ticked a subset of data-file rows, prune the data file to
+    // just those rows (in file order) before running, so newman iterates the
+    // selected rows instead of just the first N.
+    let data_file_path = match (&payload.data_file, &payload.data_row_indices) {
+        (Some(data_file), Some(indices)) if !indices.is_empty() => {
+            Some(write_filtered_data_file(&app, data_file, indices).await?)
+        }
+        (data_file, _) => data_file.clone(),
+    };
+
     let app_for_task = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app_for_task.state::<AppState>();
@@ -1128,7 +1197,7 @@ async fn run_newman(
             runner::newman::NewmanArgs {
                 collection_path: &collection_path,
                 folder: payload.folder.as_deref(),
-                data_file: payload.data_file.as_deref(),
+                data_file: data_file_path.as_deref(),
                 env_file: payload.env_file.as_deref(),
                 iterations: payload.iterations,
             },
