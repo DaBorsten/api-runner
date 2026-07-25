@@ -1,9 +1,9 @@
-import React, { useState, useRef } from "react";
-import { useTranslation } from "react-i18next";
-import { FolderOpen } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { type AppAction, type AppState, type SourceSnapshot } from "../types";
+import { FolderOpen } from "lucide-react";
+import React, { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { usePostmanApi } from "../hooks/usePostmanApi";
+import { type AppAction, type AppState, type SourceSnapshot } from "../types";
 import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 
 interface Props {

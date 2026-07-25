@@ -1,26 +1,27 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
-  Folder,
-  FolderOpen,
-  X,
+  AlertCircle,
+  ArrowLeft,
   Check,
   ChevronDown,
   ChevronRight,
-  Minus,
-  Plus,
-  Play,
-  Key,
-  FileText,
-  RefreshCw,
-  AlertCircle,
-  Upload,
-  Globe,
-  ArrowLeft,
   Eye,
+  FileText,
+  Folder,
+  FolderOpen,
+  Globe,
+  Key,
+  Minus,
+  Play,
+  Plus,
+  RefreshCw,
+  Upload,
+  X,
 } from "lucide-react";
-import { open, confirm } from "@tauri-apps/plugin-dialog";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { type usePostmanApi } from "../hooks/usePostmanApi";
 import {
   type ApiKeyEntry,
   type AppAction,
@@ -33,7 +34,6 @@ import {
   type SourceSnapshot,
   type WorkspaceSnapshot,
 } from "../types";
-import { type usePostmanApi } from "../hooks/usePostmanApi";
 import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 import { DataFilePreview } from "./DataFilePreview";
 import { RequestBodyViewer } from "./RequestBodyViewer";

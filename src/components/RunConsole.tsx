@@ -1,6 +1,6 @@
+import { ArrowLeft, Square } from "lucide-react";
 import React, { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Square } from "lucide-react";
 import type { AppAction, AppState } from "../types";
 
 interface Props {

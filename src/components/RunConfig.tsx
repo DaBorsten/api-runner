@@ -1,7 +1,7 @@
+import { open } from "@tauri-apps/plugin-dialog";
+import { Folder, Play, X } from "lucide-react";
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Folder, Play, X } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { type AppAction, type AppState } from "../types";
 
 interface Props {

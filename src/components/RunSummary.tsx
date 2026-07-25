@@ -1,8 +1,8 @@
-import React, { useState, useRef, useLayoutEffect } from "react";
+import { Check, ChevronDown, ChevronUp, Play, Terminal, X } from "lucide-react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, X, ChevronUp, ChevronDown, Play, Terminal } from "lucide-react";
-import type { AppAction, AppState, RequestResult } from "../types";
 import type { RunHistoryEntry } from "../App";
+import type { AppAction, AppState, RequestResult } from "../types";
 
 interface Props {
   run: RunHistoryEntry | null;

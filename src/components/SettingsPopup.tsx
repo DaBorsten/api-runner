@@ -1,9 +1,9 @@
+import { getVersion } from "@tauri-apps/api/app";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { CheckCircle, Download, RefreshCw, X, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getVersion } from "@tauri-apps/api/app";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { RefreshCw, CheckCircle, XCircle, X, Download } from "lucide-react";
 import type { ThemeMode } from "../hooks/useTheme";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";

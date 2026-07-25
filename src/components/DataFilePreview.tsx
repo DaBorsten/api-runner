@@ -1,7 +1,7 @@
+import { invoke } from "@tauri-apps/api/core";
+import { Minus, Search, X } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Minus, Search, X } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
 import { type DataPreview } from "../types";
 
 interface Props {

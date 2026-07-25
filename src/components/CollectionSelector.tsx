@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
-import { type AppAction, type AppState } from "../types";
+import React, { useCallback, useEffect, useState } from "react";
 import { usePostmanApi } from "../hooks/usePostmanApi";
+import { type AppAction, type AppState } from "../types";
 
 interface Props {
   state: AppState;

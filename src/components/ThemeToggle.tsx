@@ -1,5 +1,5 @@
+import { Laptop, Moon, Sun } from "lucide-react";
 import React from "react";
-import { Sun, Moon, Laptop } from "lucide-react";
 import type { ThemeMode } from "../hooks/useTheme";
 
 const CYCLE: { value: ThemeMode; icon: React.ReactNode; label: string }[] = [

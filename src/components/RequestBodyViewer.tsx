@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Highlight, themes } from "prism-react-renderer";
+import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type FormField, type RequestBody } from "../types";
 
 function useCodeTheme() {

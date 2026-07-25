@@ -1,7 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  AlertTriangle,
+  Play,
+  RefreshCw,
+  Settings,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Play, RefreshCw, Settings, Trash2, X } from "lucide-react";
 import "./App.css";
 import { ApiKeySetup } from "./components/ApiKeySetup";
 import { RunConfigDrawer } from "./components/RunConfigDrawer";
@@ -993,7 +1000,10 @@ export default function App() {
                 disabled={newmanChecking}
                 title={t("newmanRecheck")}
               >
-                <RefreshCw size={11} className={newmanChecking ? "spin" : undefined} />
+                <RefreshCw
+                  size={11}
+                  className={newmanChecking ? "spin" : undefined}
+                />
               </button>
             </span>
           )}
