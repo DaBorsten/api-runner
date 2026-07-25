@@ -283,7 +283,9 @@ export const DataFilePreview = memo(function DataFilePreview({
       // Indices above the removed row shift down by one.
       if (sel !== null) {
         change(
-          sel.filter((i) => i !== rowIndex).map((i) => (i > rowIndex ? i - 1 : i)),
+          sel
+            .filter((i) => i !== rowIndex)
+            .map((i) => (i > rowIndex ? i - 1 : i)),
         );
       }
     },
@@ -297,7 +299,9 @@ export const DataFilePreview = memo(function DataFilePreview({
       const copy = p.headers.map((_, j) => p.rows[rowIndex][j] ?? "");
       applyTable({
         headers: p.headers,
-        rows: p.rows.flatMap((row, i) => (i === rowIndex ? [row, copy] : [row])),
+        rows: p.rows.flatMap((row, i) =>
+          i === rowIndex ? [row, copy] : [row],
+        ),
       });
       lastIndexRef.current = null;
       // The copy lands right after its source, so later indices shift up by one.
