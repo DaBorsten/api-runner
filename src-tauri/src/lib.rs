@@ -84,6 +84,16 @@ pub struct NewmanPayload {
     /// the tree. `None`/empty means "run the whole collection"; a non-empty list
     /// prunes the collection to just those requests before handing it to newman.
     pub selected_request_ids: Option<Vec<String>>,
+    /// Table the user edited in the preview (added/renamed columns, added rows,
+    /// changed cells). When present it replaces the on-disk data file — the
+    /// original file is never written to.
+    pub data_table: Option<DataTableInput>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataTableInput {
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
 }
 
 /// Parsed preview of an iteration-data file, sent to the UI for the row picker.
@@ -968,6 +978,166 @@ async fn write_filtered_data_file(
     }
 }
 
+fn csv_escape(field: &str) -> String {
+    if field.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
+}
+
+/// The editor holds every cell as text, so a cell that has no counterpart in
+/// the original file (a new column, an edited value) has to be guessed at: a
+/// JSON data file may legitimately carry numbers, booleans, or nested
+/// structures, and writing those back as strings would break collections that
+/// assert on types. Re-parse as JSON, keep it a string only when that fails.
+/// Untouched cells never reach this — see [`original_cells`].
+fn json_cell(text: &str) -> serde_json::Value {
+    if text.is_empty() {
+        return serde_json::Value::String(String::new());
+    }
+    serde_json::from_str(text).unwrap_or_else(|_| serde_json::Value::String(text.to_string()))
+}
+
+/// Values from the original JSON file, keyed by `(column, text as the editor
+/// shows it)`. `None` means the key was absent from that object rather than
+/// null, so it can be left out again.
+type OriginalCells = std::collections::HashMap<(String, String), Option<serde_json::Value>>;
+
+/// Index the original file so cells the user never edited keep the exact value
+/// — and the exact absence — they had, instead of being re-guessed by
+/// [`json_cell`]. Without this, one edited cell would silently retype the whole
+/// file (`"5"` → `5`, `null` → `""`, missing keys → `""`).
+///
+/// ponytail: keyed by text, not by row index — rows get added, duplicated and
+/// deleted, so indices no longer line up. A column holding both the string "5"
+/// and the number 5 was already ambiguous in the file; first occurrence wins.
+fn original_cells(content: &str) -> OriginalCells {
+    let mut map = OriginalCells::new();
+    let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(content.trim()) else {
+        return map;
+    };
+    // Same union-of-keys header order the preview was built from.
+    let mut headers: Vec<String> = Vec::new();
+    for v in &values {
+        if let Some(obj) = v.as_object() {
+            for k in obj.keys() {
+                if !headers.iter().any(|h| h == k) {
+                    headers.push(k.clone());
+                }
+            }
+        }
+    }
+    for v in &values {
+        for h in &headers {
+            let (text, original) = match v.get(h) {
+                Some(serde_json::Value::String(s)) => (s.clone(), Some(v[h].clone())),
+                Some(serde_json::Value::Null) => {
+                    (String::new(), Some(serde_json::Value::Null))
+                }
+                None => (String::new(), None),
+                Some(other) => (other.to_string(), Some(other.clone())),
+            };
+            map.entry((h.clone(), text)).or_insert(original);
+        }
+    }
+    map
+}
+
+/// The rows `selected` keeps (`None`/empty = all), in file order, with indices
+/// that no longer exist dropped.
+fn kept_rows<'a>(table: &'a DataTableInput, selected: Option<&[usize]>) -> Vec<&'a Vec<String>> {
+    match selected {
+        Some(sel) if !sel.is_empty() => {
+            let mut idx = sel.to_vec();
+            idx.sort_unstable();
+            idx.dedup();
+            idx.iter().filter_map(|i| table.rows.get(*i)).collect()
+        }
+        _ => table.rows.iter().collect(),
+    }
+}
+
+/// Render the user-edited table, keeping only the rows at `selected`.
+fn render_data_table(
+    table: &DataTableInput,
+    selected: Option<&[usize]>,
+    as_json: bool,
+    original: Option<&OriginalCells>,
+) -> Result<String, String> {
+    let keep = kept_rows(table, selected);
+    fn cell(row: &[String], j: usize) -> &str {
+        row.get(j).map(String::as_str).unwrap_or("")
+    }
+
+    if as_json {
+        let values: Vec<serde_json::Value> = keep
+            .iter()
+            .map(|row| {
+                let mut obj = serde_json::Map::new();
+                for (j, h) in table.headers.iter().enumerate() {
+                    let text = cell(row, j);
+                    match original.and_then(|m| m.get(&(h.clone(), text.to_string()))) {
+                        // Unchanged, and the key was absent in the file — keep it absent.
+                        Some(None) => {}
+                        Some(Some(v)) => {
+                            obj.insert(h.clone(), v.clone());
+                        }
+                        None => {
+                            obj.insert(h.clone(), json_cell(text));
+                        }
+                    }
+                }
+                serde_json::Value::Object(obj)
+            })
+            .collect();
+        serde_json::to_string(&values).map_err(|e| e.to_string())
+    } else {
+        let mut lines: Vec<String> = vec![table
+            .headers
+            .iter()
+            .map(|h| csv_escape(h))
+            .collect::<Vec<_>>()
+            .join(",")];
+        for row in keep {
+            lines.push(
+                (0..table.headers.len())
+                    .map(|j| csv_escape(cell(row, j)))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        Ok(lines.join("\n"))
+    }
+}
+
+/// Write the user-edited table to a temp file. Format follows the original
+/// file's extension so newman parses it the same way; a table built from
+/// scratch (empty path) is CSV. The original file is left untouched.
+async fn write_data_table(
+    app: &AppHandle,
+    original_path: &str,
+    table: &DataTableInput,
+    selected: Option<&[usize]>,
+) -> Result<String, String> {
+    let as_json = original_path.to_lowercase().ends_with(".json");
+    // Re-read the file the preview was built from, so untouched cells keep their
+    // original types. Unreadable/unparseable falls back to guessing per cell.
+    let original = match as_json {
+        true => tokio::fs::read_to_string(original_path)
+            .await
+            .ok()
+            .map(|c| original_cells(&c)),
+        false => None,
+    };
+    let content = render_data_table(table, selected, as_json, original.as_ref())?;
+    let tmp_path = secure_temp_path(app, "data_edited", if as_json { "json" } else { "csv" })?;
+    tokio::fs::write(&tmp_path, content)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(tmp_path.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 async fn fetch_collection_detail(
     state: State<'_, AppState>,
@@ -1172,11 +1342,40 @@ async fn run_newman(
     // When the user ticked a subset of data-file rows, prune the data file to
     // just those rows (in file order) before running, so newman iterates the
     // selected rows instead of just the first N.
-    let data_file_path = match (&payload.data_file, &payload.data_row_indices) {
-        (Some(data_file), Some(indices)) if !indices.is_empty() => {
+    let data_file_path = match (
+        &payload.data_file,
+        &payload.data_table,
+        &payload.data_row_indices,
+    ) {
+        // Every row unticked: run without any iteration data at all, rather
+        // than falling back to the full file and quietly using its first row.
+        (_, _, Some(indices)) if indices.is_empty() => None,
+        // A table with no columns, no rows, or a selection that points only at
+        // rows that no longer exist carries nothing newman could bind to;
+        // handing it over would only produce a parse error.
+        (_, Some(table), indices)
+            if table.headers.is_empty()
+                || kept_rows(table, indices.as_deref()).is_empty() =>
+        {
+            None
+        }
+        // Edited table wins over the on-disk file; it already carries the user's
+        // column/cell changes, so filter its rows instead of the file's.
+        // No file at all means the user built the table from scratch — write it
+        // as CSV, which the empty path falls through to.
+        (data_file, Some(table), indices) => Some(
+            write_data_table(
+                &app,
+                data_file.as_deref().unwrap_or(""),
+                table,
+                indices.as_deref(),
+            )
+            .await?,
+        ),
+        (Some(data_file), None, Some(indices)) => {
             Some(write_filtered_data_file(&app, data_file, indices).await?)
         }
-        (data_file, _) => data_file.clone(),
+        (data_file, _, _) => data_file.clone(),
     };
 
     let app_for_task = app.clone();
@@ -1301,4 +1500,122 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|_app_handle, _event| {});
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{csv_escape, original_cells, render_data_table, DataTableInput};
+
+    #[test]
+    fn csv_escape_quotes_when_needed() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_escape("line\nbreak"), "\"line\nbreak\"");
+    }
+
+    fn table() -> DataTableInput {
+        DataTableInput {
+            headers: vec!["id".into(), "name".into()],
+            // Second row is short on purpose: cells the user never touched can
+            // stay ragged, and the missing one must render as empty.
+            rows: vec![
+                vec!["1".into(), "a,b".into()],
+                vec!["2".into()],
+                vec!["3".into(), "c".into()],
+            ],
+        }
+    }
+
+    #[test]
+    fn csv_keeps_selected_rows_in_file_order() {
+        // Out of order, duplicated, and one index past the end.
+        let out = render_data_table(&table(), Some(&[2, 0, 0, 9]), false, None).unwrap();
+        assert_eq!(out, "id,name\n1,\"a,b\"\n3,c");
+    }
+
+    #[test]
+    fn csv_without_selection_keeps_all_rows_and_pads_short_ones() {
+        let out = render_data_table(&table(), None, false, None).unwrap();
+        assert_eq!(out, "id,name\n1,\"a,b\"\n2,\n3,c");
+    }
+
+    #[test]
+    fn selection_pointing_past_the_end_keeps_nothing() {
+        // run_newman turns this into "no data file" rather than a header-only
+        // file that newman would choke on.
+        assert!(super::kept_rows(&table(), Some(&[7, 8])).is_empty());
+    }
+
+    #[test]
+    fn untouched_json_cells_keep_their_original_type() {
+        let file = r#"[
+            {"id": "007", "n": "5", "flag": "true", "note": null, "opt": "x"},
+            {"id": "008", "n": 42, "flag": false, "note": null}
+        ]"#;
+        let orig = original_cells(file);
+        let t = DataTableInput {
+            headers: vec![
+                "id".into(),
+                "n".into(),
+                "flag".into(),
+                "note".into(),
+                "opt".into(),
+            ],
+            rows: vec![
+                // Exactly what the preview showed, except `n` edited to 9.
+                vec!["007".into(), "9".into(), "true".into(), "".into(), "x".into()],
+                vec!["008".into(), "42".into(), "false".into(), "".into(), "".into()],
+            ],
+        };
+        let out = render_data_table(&t, None, true, Some(&orig)).unwrap();
+        assert_eq!(
+            out,
+            // Row 1: only `n` was edited, so only it is re-guessed (→ number 9);
+            // the *string* "true" and the null survive as they were.
+            // Row 2: the number 42 stays a number, `false` stays a bool, and
+            // `opt` — absent in the file — stays absent instead of becoming "".
+            concat!(
+                r#"[{"flag":"true","id":"007","n":9,"note":null,"opt":"x"},"#,
+                r#"{"flag":false,"id":"008","n":42,"note":null}]"#
+            )
+        );
+    }
+
+    #[test]
+    fn ambiguous_column_falls_back_to_first_occurrence() {
+        // Same column holding the string "5" and the number 5: the file itself
+        // is ambiguous once rendered as text, so first-seen wins. Documents the
+        // known ceiling of the text-keyed lookup.
+        let orig = original_cells(r#"[{"n": "5"}, {"n": 5}]"#);
+        let t = DataTableInput {
+            headers: vec!["n".into()],
+            rows: vec![vec!["5".into()], vec!["5".into()]],
+        };
+        let out = render_data_table(&t, None, true, Some(&orig)).unwrap();
+        assert_eq!(out, r#"[{"n":"5"},{"n":"5"}]"#);
+    }
+
+    #[test]
+    fn json_restores_non_string_cell_types() {
+        let t = DataTableInput {
+            headers: vec!["count".into(), "on".into(), "opts".into(), "name".into()],
+            rows: vec![vec![
+                "5".into(),
+                "true".into(),
+                "{\"a\":1}".into(),
+                "hello".into(),
+            ]],
+        };
+        // serde_json's map is ordered by key, not by column — irrelevant to
+        // newman, which looks variables up by name.
+        let out = render_data_table(&t, None, true, None).unwrap();
+        assert_eq!(out, r#"[{"count":5,"name":"hello","on":true,"opts":{"a":1}}]"#);
+    }
+
+    #[test]
+    fn json_missing_cell_becomes_empty_string() {
+        let out = render_data_table(&table(), Some(&[1]), true, None).unwrap();
+        assert_eq!(out, r#"[{"id":2,"name":""}]"#);
+    }
 }

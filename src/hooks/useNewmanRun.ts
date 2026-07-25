@@ -89,6 +89,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
         env_file: config.envFile,
         iterations: config.iterations,
         data_row_indices: config.dataRowIndices,
+        data_table: config.dataTable,
         selected_request_ids: config.selectedRequestIds,
       },
     });

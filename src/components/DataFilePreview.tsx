@@ -1,17 +1,112 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Minus, Search, X } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { Copy, Minus, Plus, RotateCcw, Search, X } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type DataPreview } from "../types";
 
 interface Props {
-  path: string;
+  // null when the user builds a table from scratch instead of loading a file.
+  path: string | null;
   selected: number[] | null;
   onChange: (next: number[] | null) => void;
   onCollapse: () => void;
   onTotalChange: (total: number) => void;
   onColumnsChange?: (cols: number) => void;
+  // Edited table, or null when the file's own contents are in use. Edits are
+  // held here (never written to the original file) and the run uses them.
+  table: DataPreview | null;
+  onTableChange: (next: DataPreview | null) => void;
 }
+
+interface RowProps {
+  rowIndex: number;
+  cells: string[];
+  // Only the count, never the header array — so typing in a column name does
+  // not invalidate every row.
+  colCount: number;
+  isSelected: boolean;
+  onCell: (rowIndex: number, col: number, value: string) => void;
+  onCommit: () => void;
+  onToggle: (rowIndex: number, shiftKey: boolean) => void;
+  onDuplicate: (rowIndex: number) => void;
+  onDelete: (rowIndex: number) => void;
+  duplicateTitle: string;
+  deleteTitle: string;
+}
+
+/**
+ * One table row. Memoized, and every callback it gets is stable, so a keystroke
+ * in one cell re-renders that row alone instead of all of them.
+ */
+const DataRow = memo(function DataRow({
+  rowIndex,
+  cells,
+  colCount,
+  isSelected,
+  onCell,
+  onCommit,
+  onToggle,
+  onDuplicate,
+  onDelete,
+  duplicateTitle,
+  deleteTitle,
+}: RowProps) {
+  return (
+    <tr
+      className={isSelected ? "data-row--selected" : ""}
+      onClick={(e) => onToggle(rowIndex, e.shiftKey)}
+      style={{ cursor: "pointer" }}
+    >
+      <td className="data-table-check data-table-check--first">
+        <input
+          type="checkbox"
+          className="tree-checkbox"
+          checked={isSelected}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) =>
+            onToggle(rowIndex, (e.nativeEvent as MouseEvent).shiftKey)
+          }
+        />
+      </td>
+      {Array.from({ length: colCount }, (_, j) => (
+        <td key={j}>
+          <input
+            className="data-cell-input"
+            value={cells[j] ?? ""}
+            onChange={(e) => onCell(rowIndex, j, e.target.value)}
+            onBlur={onCommit}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </td>
+      ))}
+      {colCount === 0 && <td />}
+      <td className="data-table-check data-table-check--last">
+        <div className="data-row-actions">
+          <button
+            className="data-cell-del data-cell-del--neutral"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDuplicate(rowIndex);
+            }}
+            title={duplicateTitle}
+          >
+            <Copy size={14} />
+          </button>
+          <button
+            className="data-cell-del"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(rowIndex);
+            }}
+            title={deleteTitle}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+});
 
 /**
  * Renders a CSV/JSON data file as a table with a select-all header checkbox and
@@ -28,9 +123,11 @@ export const DataFilePreview = memo(function DataFilePreview({
   onCollapse,
   onTotalChange,
   onColumnsChange,
+  table,
+  onTableChange,
 }: Props) {
   const { t } = useTranslation();
-  const [preview, setPreview] = useState<DataPreview | null>(null);
+  const [loaded, setLoaded] = useState<DataPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -65,20 +162,30 @@ export const DataFilePreview = memo(function DataFilePreview({
     window.addEventListener("pointerup", onUp);
   }
 
+  // Text being typed lives here instead of in the app-wide run config: a
+  // keystroke would otherwise re-render the whole config drawer. Committed
+  // upward on blur, on any structural edit, and on unmount.
+  const [draft, setDraft] = useState<DataPreview | null>(null);
+
   const [prevPath, setPrevPath] = useState(path);
   if (prevPath !== path) {
     setPrevPath(path);
     setLoading(true);
     setError(null);
-    setPreview(null);
+    setLoaded(null);
+    setDraft(null);
   }
 
   useEffect(() => {
     let cancelled = false;
     lastIndexRef.current = null;
+    if (!path) {
+      setLoading(false);
+      return;
+    }
     invoke<DataPreview>("read_data_file", { path })
       .then((p) => {
-        if (!cancelled) setPreview(p);
+        if (!cancelled) setLoaded(p);
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -91,6 +198,8 @@ export const DataFilePreview = memo(function DataFilePreview({
     };
   }, [path]);
 
+  // Edited table wins; `loaded` stays around untouched so reset is instant.
+  const preview = draft ?? table ?? loaded;
   const total = preview?.rows.length ?? 0;
   const selectedCount = selected === null ? total : selected.length;
   const allSelected = total > 0 && selectedCount === total;
@@ -109,6 +218,138 @@ export const DataFilePreview = memo(function DataFilePreview({
     }
   }, [allSelected, noneSelected, total]);
 
+  // This render's data, for the stable callbacks below: they must not close
+  // over state, or a memoized row would keep calling an outdated version.
+  // Filled in just before the JSX, so it is current whenever an event fires.
+  const latest = useRef({
+    preview,
+    selected,
+    total,
+    visible: [] as number[],
+    onChange,
+    onTableChange,
+  });
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const onTableChangeRef = useRef(onTableChange);
+  onTableChangeRef.current = onTableChange;
+
+  // Collapsed or closed with text still in the draft — don't drop it.
+  useEffect(
+    () => () => {
+      if (draftRef.current) onTableChangeRef.current(draftRef.current);
+    },
+    [],
+  );
+
+  const commitDraft = useCallback(() => {
+    if (draftRef.current) {
+      onTableChangeRef.current(draftRef.current);
+      setDraft(null);
+    }
+  }, []);
+
+  /** Structural edits skip the draft and go straight to the run config. */
+  const applyTable = useCallback((next: DataPreview) => {
+    latest.current.onTableChange(next);
+    setDraft(null);
+  }, []);
+
+  const setCell = useCallback(
+    (rowIndex: number, col: number, value: string) => {
+      const { preview: p } = latest.current;
+      if (!p) return;
+      setDraft({
+        headers: p.headers,
+        rows: p.rows.map((row, i) =>
+          i === rowIndex
+            ? p.headers.map((_, j) => (j === col ? value : (row[j] ?? "")))
+            : row,
+        ),
+      });
+    },
+    [],
+  );
+
+  const deleteRow = useCallback(
+    (rowIndex: number) => {
+      const { preview: p, selected: sel, onChange: change } = latest.current;
+      if (!p) return;
+      applyTable({
+        headers: p.headers,
+        rows: p.rows.filter((_, i) => i !== rowIndex),
+      });
+      lastIndexRef.current = null;
+      // Indices above the removed row shift down by one.
+      if (sel !== null) {
+        change(
+          sel.filter((i) => i !== rowIndex).map((i) => (i > rowIndex ? i - 1 : i)),
+        );
+      }
+    },
+    [applyTable],
+  );
+
+  const duplicateRow = useCallback(
+    (rowIndex: number) => {
+      const { preview: p, selected: sel, onChange: change } = latest.current;
+      if (!p) return;
+      const copy = p.headers.map((_, j) => p.rows[rowIndex][j] ?? "");
+      applyTable({
+        headers: p.headers,
+        rows: p.rows.flatMap((row, i) => (i === rowIndex ? [row, copy] : [row])),
+      });
+      lastIndexRef.current = null;
+      // The copy lands right after its source, so later indices shift up by one.
+      // It inherits the source row's selection state.
+      if (sel !== null) {
+        const next = sel.map((i) => (i > rowIndex ? i + 1 : i));
+        if (sel.includes(rowIndex)) next.push(rowIndex + 1);
+        change(next.sort((a, b) => a - b));
+      }
+    },
+    [applyTable],
+  );
+
+  const toggleRow = useCallback((i: number, shiftKey: boolean) => {
+    const {
+      preview: p,
+      selected: sel,
+      total: rowTotal,
+      visible,
+      onChange: change,
+    } = latest.current;
+    const set = new Set(sel ?? (p?.rows ?? []).map((_, idx) => idx));
+
+    if (
+      shiftKey &&
+      lastIndexRef.current !== null &&
+      lastIndexRef.current !== i
+    ) {
+      const anchorPos = visible.indexOf(lastIndexRef.current);
+      const currPos = visible.indexOf(i);
+      if (anchorPos !== -1 && currPos !== -1) {
+        const target = !set.has(i);
+        const [from, to] =
+          anchorPos < currPos ? [anchorPos, currPos] : [currPos, anchorPos];
+        visible.slice(from, to + 1).forEach((k) => {
+          if (target) set.add(k);
+          else set.delete(k);
+        });
+      } else {
+        if (set.has(i)) set.delete(i);
+        else set.add(i);
+      }
+    } else {
+      if (set.has(i)) set.delete(i);
+      else set.add(i);
+    }
+
+    lastIndexRef.current = i;
+    const next = [...set].sort((a, b) => a - b);
+    change(next.length === rowTotal ? null : next);
+  }, []);
+
   if (loading)
     return <div className="data-preview-status">{t("dataPreviewLoading")}</div>;
   if (error)
@@ -117,16 +358,77 @@ export const DataFilePreview = memo(function DataFilePreview({
         {error}
       </div>
     );
-  if (!preview || total === 0) {
+  // An edited table keeps the editor up even when emptied out, otherwise the
+  // user deletes the last row/column and loses the add buttons with it.
+  if (
+    !preview ||
+    (!table && !draft && total === 0 && preview.headers.length === 0)
+  ) {
     return <div className="data-preview-status">{t("dataPreviewEmpty")}</div>;
   }
 
+  const headers = preview.headers;
+  // Empty or repeated column names silently collide (JSON keeps only the last
+  // one, CSV writes an unusable column), so flag them in place.
+  const badHeaders = new Set(
+    headers.filter((h, j) => h.trim() === "" || headers.indexOf(h) !== j),
+  );
+
+  // Column names are typed too, so they go through the draft like cells do.
+  function renameColumn(col: number, value: string) {
+    setDraft({
+      headers: headers.map((h, j) => (j === col ? value : h)),
+      rows: preview!.rows,
+    });
+  }
+
+  function addColumn() {
+    let name = t("dataPreviewNewColumn");
+    let n = 1;
+    while (headers.includes(name)) name = `${t("dataPreviewNewColumn")}_${++n}`;
+    applyTable({
+      headers: [...headers, name],
+      rows: preview!.rows.map((row) => [
+        ...headers.map((_, j) => row[j] ?? ""),
+        "",
+      ]),
+    });
+  }
+
+  function deleteColumn(col: number) {
+    applyTable({
+      headers: headers.filter((_, j) => j !== col),
+      rows: preview!.rows.map((row) =>
+        headers.map((_, j) => row[j] ?? "").filter((_, j) => j !== col),
+      ),
+    });
+  }
+
+  function addRow() {
+    applyTable({
+      headers,
+      rows: [...preview!.rows, headers.map(() => "")],
+    });
+    // An empty row matches no filter, so it would be added invisibly — drop the
+    // filter instead of leaving the user staring at an unchanged table.
+    setSearchQuery("");
+    // Keep an explicit selection inclusive of the new row, so a freshly added
+    // row actually runs instead of being silently skipped.
+    if (selected !== null) onChange([...selected, total]);
+  }
+
+  // While text is being typed, match against the last committed values instead
+  // of the draft — otherwise editing a matching cell into a non-matching one
+  // unmounts the row (and the focused input) after a single keystroke.
+  // Membership is re-evaluated on commit, i.e. once the user leaves the cell.
+  const matchRows = (draft ? (table ?? loaded)?.rows : null) ?? preview.rows;
   const filteredRows: Array<{ origIndex: number; cells: string[] }> =
     searchQuery.trim()
       ? preview.rows.reduce<Array<{ origIndex: number; cells: string[] }>>(
           (acc, row, i) => {
             const lower = searchQuery.toLowerCase();
-            if (row.some((cell) => cell.toLowerCase().includes(lower))) {
+            const against = matchRows[i] ?? row;
+            if (against.some((cell) => cell.toLowerCase().includes(lower))) {
               acc.push({ origIndex: i, cells: row });
             }
             return acc;
@@ -142,38 +444,14 @@ export const DataFilePreview = memo(function DataFilePreview({
     onChange(allSelected ? [] : null);
   }
 
-  function toggleRow(i: number, shiftKey: boolean) {
-    const set = new Set(selected ?? preview!.rows.map((_, idx) => idx));
-
-    if (
-      shiftKey &&
-      lastIndexRef.current !== null &&
-      lastIndexRef.current !== i
-    ) {
-      const visibleOrigIndices = filteredRows.map((r) => r.origIndex);
-      const anchorPos = visibleOrigIndices.indexOf(lastIndexRef.current);
-      const currPos = visibleOrigIndices.indexOf(i);
-      if (anchorPos !== -1 && currPos !== -1) {
-        const target = !set.has(i);
-        const [from, to] =
-          anchorPos < currPos ? [anchorPos, currPos] : [currPos, anchorPos];
-        visibleOrigIndices.slice(from, to + 1).forEach((k) => {
-          if (target) set.add(k);
-          else set.delete(k);
-        });
-      } else {
-        if (set.has(i)) set.delete(i);
-        else set.add(i);
-      }
-    } else {
-      if (set.has(i)) set.delete(i);
-      else set.add(i);
-    }
-
-    lastIndexRef.current = i;
-    const next = [...set].sort((a, b) => a - b);
-    onChange(next.length === total ? null : next);
-  }
+  latest.current = {
+    preview,
+    selected,
+    total,
+    visible: filteredRows.map((r) => r.origIndex),
+    onChange,
+    onTableChange,
+  };
 
   return (
     <div className="data-preview">
@@ -216,75 +494,121 @@ export const DataFilePreview = memo(function DataFilePreview({
         </div>
         <button
           className="data-preview-minimize"
+          onClick={() => {
+            setDraft(null);
+            onTableChange(null);
+            // Rows added on top of the file are gone after the reset, so their
+            // indices would dangle — go back to "all rows".
+            onChange(null);
+            lastIndexRef.current = null;
+          }}
+          disabled={(!table && !draft) || !path}
+          title={t("dataPreviewReset")}
+        >
+          <RotateCcw size={13} />
+        </button>
+        <button
+          className="data-preview-minimize"
           onClick={onCollapse}
           title={t("dataPreviewMinimize")}
         >
           <Minus size={14} />
         </button>
       </div>
-      <div className="data-preview-scroll" style={{ height: scrollHeight }}>
-        <table className="data-table">
-          <thead>
-            <tr onClick={toggleAll} style={{ cursor: "pointer" }}>
-              <th className="data-table-check">
-                <input
-                  ref={headRef}
-                  type="checkbox"
-                  className="tree-checkbox"
-                  checked={allSelected}
-                  onChange={toggleAll}
-                  onClick={(e) => e.stopPropagation()}
-                  title={t("dataPreviewToggleAll")}
-                />
-              </th>
-              {preview.headers.map((h, j) => (
-                <th key={j}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filteredRows.length === 0 && (
-              <tr>
-                <td
-                  colSpan={preview.headers.length + 1}
-                  style={{
-                    textAlign: "center",
-                    padding: "12px 0",
-                    opacity: 0.5,
-                  }}
-                >
-                  {t("dataPreviewNoMatch", { query: searchQuery })}
-                </td>
-              </tr>
-            )}
-            {filteredRows.map(({ origIndex, cells }) => (
-              <tr
-                key={origIndex}
-                className={isRowSelected(origIndex) ? "data-row--selected" : ""}
-                onClick={(e) => toggleRow(origIndex, e.shiftKey)}
-                style={{ cursor: "pointer" }}
-              >
-                <td className="data-table-check">
+      <div className="data-preview-table-box">
+        {filteredRows.length === 0 && searchQuery !== "" && (
+          <div className="data-preview-empty">
+            {t("dataPreviewNoMatch", { query: searchQuery })}
+          </div>
+        )}
+        <div className="data-preview-scroll" style={{ height: scrollHeight }}>
+          <table className="data-table">
+            <thead>
+              <tr onClick={toggleAll} style={{ cursor: "pointer" }}>
+                <th className="data-table-check data-table-check--first">
                   <input
+                    ref={headRef}
                     type="checkbox"
                     className="tree-checkbox"
-                    checked={isRowSelected(origIndex)}
+                    checked={allSelected}
+                    onChange={toggleAll}
                     onClick={(e) => e.stopPropagation()}
-                    onChange={(e) =>
-                      toggleRow(
-                        origIndex,
-                        (e.nativeEvent as MouseEvent).shiftKey,
-                      )
-                    }
+                    title={t("dataPreviewToggleAll")}
                   />
-                </td>
-                {preview.headers.map((_, j) => (
-                  <td key={j}>{cells[j] ?? ""}</td>
+                </th>
+                {headers.map((h, j) => (
+                  <th key={j}>
+                    <div className="data-cell-wrap">
+                      <input
+                        className={`data-cell-input data-cell-input--head${
+                          badHeaders.has(h) ? " data-cell-input--invalid" : ""
+                        }`}
+                        value={h}
+                        onChange={(e) => renameColumn(j, e.target.value)}
+                        onBlur={commitDraft}
+                        onClick={(e) => e.stopPropagation()}
+                        title={
+                          badHeaders.has(h)
+                            ? t("dataPreviewBadColumn")
+                            : t("dataPreviewRenameColumn")
+                        }
+                      />
+                      <button
+                        className="data-cell-del"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteColumn(j);
+                        }}
+                        title={t("dataPreviewDeleteColumn")}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </th>
                 ))}
+                {/* ponytail: filler eats the leftover width when there are no
+                    columns, so the checkbox stays left and actions stay right
+                    instead of the two 1%-wide cells splitting the table. */}
+                {headers.length === 0 && <th />}
+                <th className="data-table-check data-table-check--last">
+                  <button
+                    className="data-cell-add"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      addColumn();
+                    }}
+                    title={t("dataPreviewAddColumn")}
+                  >
+                    <Plus size={15} />
+                  </button>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filteredRows.map(({ origIndex, cells }) => (
+                <DataRow
+                  key={origIndex}
+                  rowIndex={origIndex}
+                  cells={cells}
+                  colCount={headers.length}
+                  isSelected={isRowSelected(origIndex)}
+                  onCell={setCell}
+                  onCommit={commitDraft}
+                  onToggle={toggleRow}
+                  onDuplicate={duplicateRow}
+                  onDelete={deleteRow}
+                  duplicateTitle={t("dataPreviewDuplicateRow")}
+                  deleteTitle={t("dataPreviewDeleteRow")}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* Outside the scroll area, so it stays visible without sticky tricks. */}
+        <button className="data-add-row" onClick={addRow}>
+          <Plus size={12} />
+          {t("dataPreviewAddRow")}
+        </button>
       </div>
     </div>
   );

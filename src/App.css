@@ -3808,6 +3808,81 @@ body.is-resizing * {
   border-color: var(--accent);
 }
 
+.data-preview-minimize:disabled {
+  opacity: 0.4;
+  cursor: default;
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+/* Editable cells / column names: look like plain text until focused. */
+.data-cell-input {
+  /* ponytail: fixed width so the column doesn't jump on every keystroke;
+     longer text scrolls inside the input. */
+  width: 160px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: inherit;
+  font: inherit;
+  padding: 1px 3px;
+  outline: none;
+}
+
+.data-cell-input:hover {
+  border-color: var(--border);
+}
+
+.data-cell-input:focus {
+  background: var(--surface2);
+  border-color: var(--accent);
+}
+
+.data-cell-input--head {
+  font-weight: 600;
+}
+
+/* Duplicate or empty column name — the column would be dropped on run. */
+.data-cell-input--invalid,
+.data-cell-input--invalid:hover {
+  border-color: var(--danger, #e5484d);
+  color: var(--danger, #e5484d);
+}
+
+/* Delete buttons for columns/rows: only visible on hover of their cell/row. */
+.data-cell-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.data-cell-del {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--muted);
+  cursor: pointer;
+  /* ponytail: fixed 24px box = comfortable click target, no layout shift */
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  opacity: 0.35;
+}
+
+th:hover > .data-cell-wrap > .data-cell-del,
+tr:hover .data-cell-del,
+.data-cell-del:focus-visible {
+  opacity: 1;
+}
+
+.data-cell-del:hover {
+  background: var(--surface2);
+  color: var(--danger, #e5484d);
+}
+
 .data-preview-title {
   font-size: 11px;
   font-weight: 600;
@@ -3834,10 +3909,47 @@ body.is-resizing * {
   word-break: break-word;
 }
 
-.data-preview-scroll {
-  overflow: auto;
+.data-preview-table-box {
+  position: relative;
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/* ponytail: overlay instead of a table row, so it stays put while the
+   columns scroll horizontally. */
+.data-preview-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.data-preview-scroll {
+  overflow: auto;
+}
+
+.data-add-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 0;
+  background: var(--surface2);
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.data-add-row:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 /* Drag handle along the top edge of the preview panel: grab and pull up/down
@@ -3868,7 +3980,10 @@ body.is-resizing * {
 
 .data-table {
   border-collapse: collapse;
-  width: 100%;
+  /* ponytail: max-content lets columns keep their natural width and scroll
+     horizontally instead of squeezing headers into ellipsis. */
+  width: max-content;
+  min-width: 100%;
   font-size: 12px;
   font-family: var(--font-mono);
   user-select: none;
@@ -3903,15 +4018,75 @@ body.is-resizing * {
   opacity: 0.7;
 }
 
-.data-table .data-row--selected {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+/* Rows carry the background so the sticky first/last columns can inherit it
+   instead of hardcoding a different surface. */
+.data-table tbody tr {
+  background: var(--bg);
 }
 
+.data-table .data-row--selected {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
+/* Selection column (left) and action column (right) stay pinned; the data
+   columns between them scroll horizontally. */
 .data-table-check {
   width: 1%;
   text-align: center;
   padding-left: 10px;
   padding-right: 10px;
+  position: sticky;
+  z-index: 2;
+  background: inherit;
+}
+
+.data-table thead .data-table-check {
+  z-index: 3;
+  background: var(--surface2);
+}
+
+.data-table-check--first {
+  left: 0;
+}
+
+.data-table-check--last {
+  right: 0;
+}
+
+.data-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+/* Add-column button sits at the right edge, aligned with the row actions. */
+.data-table thead .data-table-check--last {
+  text-align: right;
+}
+
+.data-cell-del--neutral:hover {
+  color: var(--fg);
+}
+
+/* Add-column button in the header's action cell. */
+.data-cell-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--muted);
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.data-cell-add:hover {
+  background: var(--surface);
+  color: var(--accent);
 }
 
 /* ── Data File Dropzone ──────────────────────────────────────────────────── */

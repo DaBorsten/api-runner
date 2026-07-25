@@ -29,6 +29,7 @@ import {
   type CollectionFolder,
   type CollectionItem,
   type CollectionRequest,
+  type DataPreview,
   isFolder,
   type LocalCollection,
   type SourceSnapshot,
@@ -449,7 +450,11 @@ export function RunConfigDrawer({
           if (!lower.endsWith(".json") && !lower.endsWith(".csv")) return;
           dispatch({
             type: "SET_RUN_CONFIG",
-            payload: { dataFile: filePath, dataRowIndices: null },
+            payload: {
+              dataFile: filePath,
+              dataRowIndices: null,
+              dataTable: null,
+            },
           });
           setDataPreviewCollapsed(false);
         }
@@ -504,8 +509,14 @@ export function RunConfigDrawer({
   const selectedName =
     state.selectedLocalCollection?.name ?? state.selectedCollection?.name ?? "";
   const canRun = !!(state.selectedCollection ?? state.selectedLocalCollection);
+  // Empty or repeated column names collide silently once written out (JSON keeps
+  // only the last one, CSV writes an unusable column), so block the run instead
+  // of letting the user lose a column without noticing.
+  const badColumns = (cfg.dataTable?.headers ?? []).some(
+    (h, j, all) => h.trim() === "" || all.indexOf(h) !== j,
+  );
   // The run additionally requires at least one request ticked in the tree.
-  const runEnabled = canRun && selectedRequestIds.size > 0;
+  const runEnabled = canRun && selectedRequestIds.size > 0 && !badColumns;
 
   const collectionKey = `${state.selectedCollection?.uid ?? ""}|${state.selectedLocalCollection?.id ?? ""}`;
   const [prevCollectionKey, setPrevCollectionKey] = useState(collectionKey);
@@ -692,6 +703,12 @@ export function RunConfigDrawer({
     },
     [setConfig],
   );
+  const handleDataTableChange = useCallback(
+    (next: DataPreview | null) => {
+      setConfig({ dataTable: next });
+    },
+    [setConfig],
+  );
   const handleCollapseDataPreview = useCallback(
     () => setDataPreviewCollapsed(true),
     [],
@@ -761,14 +778,16 @@ export function RunConfigDrawer({
   // Iterations track the selected data-row count, but update only when the row
   // selection itself changes (file / picked rows / total) — never on a manual
   // iteration edit, so a typed or +/− value sticks instead of snapping back.
-  const rowSelectionSig = cfg.dataFile
-    ? `${cfg.dataFile}|${cfg.dataRowIndices === null ? `all:${dataRowTotal}` : cfg.dataRowIndices.length}`
+  // ponytail: a from-scratch table has no path, so it keys on a constant.
+  const dataKey = cfg.dataFile ?? (cfg.dataTable ? "table" : null);
+  const rowSelectionSig = dataKey
+    ? `${dataKey}|${cfg.dataRowIndices === null ? `all:${dataRowTotal}` : cfg.dataRowIndices.length}`
     : null;
   const prevRowSelectionSig = useRef(rowSelectionSig);
   useEffect(() => {
     if (rowSelectionSig === prevRowSelectionSig.current) return;
     prevRowSelectionSig.current = rowSelectionSig;
-    if (!cfg.dataFile) return;
+    if (!dataKey) return;
     // Total not loaded yet (0 rows with "all" selected) — the sig changes again
     // once it arrives, so wait rather than snapping iterations to 1.
     if (cfg.dataRowIndices === null && dataRowTotal === 0) return;
@@ -779,7 +798,7 @@ export function RunConfigDrawer({
       setConfig({ iterations: nextIterations });
   }, [
     rowSelectionSig,
-    cfg.dataFile,
+    dataKey,
     cfg.dataRowIndices,
     dataRowTotal,
     cfg.iterations,
@@ -801,7 +820,7 @@ export function RunConfigDrawer({
   // Close the open data preview with Escape (capture so it wins over any
   // page-level Escape handler that would otherwise close the whole config).
   useEffect(() => {
-    if (!cfg.dataFile || dataPreviewCollapsed) return;
+    if ((!cfg.dataFile && !cfg.dataTable) || dataPreviewCollapsed) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -810,7 +829,7 @@ export function RunConfigDrawer({
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [cfg.dataFile, dataPreviewCollapsed]);
+  }, [cfg.dataFile, cfg.dataTable, dataPreviewCollapsed]);
 
   async function pickDataFile() {
     const path = await open({
@@ -820,7 +839,7 @@ export function RunConfigDrawer({
     // Reset the row selection so the new file starts with all rows selected,
     // and re-open the preview so the freshly picked rows are visible.
     if (typeof path === "string") {
-      setConfig({ dataFile: path, dataRowIndices: null });
+      setConfig({ dataFile: path, dataRowIndices: null, dataTable: null });
       setDataPreviewCollapsed(false);
     }
   }
@@ -1297,7 +1316,7 @@ export function RunConfigDrawer({
         </div>
       </div>
 
-      {cfg.dataFile && !dataPreviewCollapsed && (
+      {(cfg.dataFile || cfg.dataTable) && !dataPreviewCollapsed && (
         <div className="config-data-preview">
           <DataFilePreview
             path={cfg.dataFile}
@@ -1306,6 +1325,8 @@ export function RunConfigDrawer({
             onCollapse={handleCollapseDataPreview}
             onTotalChange={setDataRowTotal}
             onColumnsChange={setDataColumnCount}
+            table={cfg.dataTable}
+            onTableChange={handleDataTableChange}
           />
         </div>
       )}
@@ -1318,6 +1339,7 @@ export function RunConfigDrawer({
           className="btn btn--primary btn--run"
           onClick={onRun}
           disabled={!runEnabled}
+          title={badColumns ? t("dataPreviewBadColumn") : undefined}
         >
           <Play size={13} />{" "}
           {state.selectedLocalCollection
@@ -1500,13 +1522,13 @@ export function RunConfigDrawer({
       <div className="config-summary-panel">
         <div className="config-summary-section">
           <div className="config-summary-label">{t("dataFile")}</div>
-          {cfg.dataFile ? (
+          {cfg.dataFile || cfg.dataTable ? (
             <div className="data-file-card">
               <div className="data-file-card-main">
                 <div className="data-file-card-icon-wrap">
                   <FileText size={24} />
                   <span className="data-file-card-ext">
-                    {cfg.dataFile.split(".").pop()?.toUpperCase() ?? "FILE"}
+                    {cfg.dataFile?.split(".").pop()?.toUpperCase() ?? "CSV"}
                   </span>
                 </div>
                 <div className="data-file-card-info">
@@ -1516,7 +1538,8 @@ export function RunConfigDrawer({
                     title={t("openPreview")}
                   >
                     <Eye size={13} className="data-file-card-name-icon" />
-                    {cfg.dataFile.split(/[\\/]/).pop()}
+                    {cfg.dataFile?.split(/[\\/]/).pop() ??
+                      t("dataFileOwnTable")}
                   </button>
                   <div className="data-file-card-status">
                     {t("dataFileReady", {
@@ -1530,7 +1553,11 @@ export function RunConfigDrawer({
                 <button
                   className="data-file-card-remove"
                   onClick={() =>
-                    setConfig({ dataFile: null, dataRowIndices: null })
+                    setConfig({
+                      dataFile: null,
+                      dataRowIndices: null,
+                      dataTable: null,
+                    })
                   }
                 >
                   <X size={14} />
@@ -1586,6 +1613,23 @@ export function RunConfigDrawer({
               <div className="data-file-dropzone-formats">
                 <span className="data-file-format-badge">.json</span>
                 <span className="data-file-format-badge">.csv</span>
+              </div>
+              <div className="data-file-dropzone-sub">
+                {t("dataFileOr")}{" "}
+                <button
+                  type="button"
+                  className="data-file-dropzone-link"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfig({
+                      dataTable: { headers: ["col1"], rows: [[""]] },
+                      dataRowIndices: null,
+                    });
+                    setDataPreviewCollapsed(false);
+                  }}
+                >
+                  {t("dataFileCreateTable")}
+                </button>
               </div>
             </div>
           )}

@@ -83,6 +83,9 @@ export interface RunConfig {
   // Indices of the data-file rows the user kept (via the preview checkboxes).
   // `null` means "all rows"; an explicit array filters to those rows.
   dataRowIndices: number[] | null;
+  // Table edited in the preview (columns/rows/cells). `null` = use the file
+  // as-is; set means the run uses this table instead of the file's contents.
+  dataTable: DataPreview | null;
 }
 
 // Tabular preview of a CSV/JSON data file, returned by the `read_data_file`

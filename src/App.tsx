@@ -48,6 +48,7 @@ const initialState: AppState = {
     folder: null,
     selectedRequestIds: null,
     dataRowIndices: null,
+    dataTable: null,
   },
   runStatus: "idle",
   outputLines: [],
@@ -880,6 +881,7 @@ export default function App() {
           folder: null,
           selectedRequestIds: null,
           dataRowIndices: null,
+          dataTable: null,
         },
       });
       setConfigOpen(true);
