@@ -478,6 +478,13 @@ async fn check_newman_installed() -> bool {
         .unwrap_or(false)
 }
 
+/// Self-Update ersetzt auf Linux das laufende AppImage. Bei deb/rpm gibt es
+/// nichts zu ersetzen — dort kann die UI nur auf die Release-Seite verweisen.
+#[tauri::command]
+fn can_self_update() -> bool {
+    cfg!(not(target_os = "linux")) || std::env::var_os("APPIMAGE").is_some()
+}
+
 // ── Commands: local collections ──────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1482,6 +1489,7 @@ pub fn run() {
             save_local_collection,
             delete_local_collection,
             check_newman_installed,
+            can_self_update,
             get_source_snapshot,
             save_source_snapshot,
             fetch_workspaces,

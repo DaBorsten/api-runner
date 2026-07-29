@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { type usePostmanApi } from "../hooks/usePostmanApi";
 import {
   type ApiKeyEntry,
@@ -357,6 +358,8 @@ export function RunConfigDrawer({
     }
   }
   const [showAddPopup, setShowAddPopup] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(popupRef, showAddPopup);
   const [popupTab, setPopupTab] = useState<"apikey" | "file">("apikey");
   const [inputLabel, setInputLabel] = useState("");
   const [inputKey, setInputKey] = useState("");
@@ -373,7 +376,6 @@ export function RunConfigDrawer({
     "idle",
   );
   const dragCounter = useRef(0);
-  const popupRef = useRef<HTMLDivElement>(null);
   const [dataFileDragging, setDataFileDragging] = useState<
     "idle" | "valid" | "invalid"
   >("idle");
@@ -381,6 +383,10 @@ export function RunConfigDrawer({
   const [envMode, setEnvMode] = useState<"postman" | "local">(
     state.runConfig.envFile ? "local" : "postman",
   );
+
+  useEffect(() => {
+    if (state.selectedLocalCollection) setEnvMode("local");
+  }, [state.selectedLocalCollection]);
 
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     const stored = localStorage.getItem("config-right-width");
@@ -724,6 +730,7 @@ export function RunConfigDrawer({
   async function handleSaveApiKey() {
     if (!inputKey.trim()) return;
     setSaving(true);
+    dispatch({ type: "CLEAR_ERROR" });
     try {
       const id = `key_${Date.now()}`;
       const label = inputLabel.trim() || "Postman Key";
@@ -736,6 +743,7 @@ export function RunConfigDrawer({
       setShowAddPopup(false);
       await performSync(newKey);
     } catch (e: unknown) {
+      console.error("[RunConfigDrawer] failed to save API key:", e);
       dispatch({ type: "SET_ERROR", payload: String(e) });
     } finally {
       setSaving(false);
@@ -1409,6 +1417,9 @@ export function RunConfigDrawer({
             {popupTab === "apikey" && (
               <div className="popup-body">
                 <p className="popup-desc">{t("apiKeyDesc")}</p>
+                {state.error && (
+                  <div className="banner banner--error">{state.error}</div>
+                )}
                 <div className="field-col">
                   <input
                     className="input"
@@ -1443,6 +1454,8 @@ export function RunConfigDrawer({
                 {!pendingLocalFile ? (
                   <div
                     className={`drop-zone ${dragging === "valid" ? "drop-zone--active" : dragging === "invalid" ? "drop-zone--invalid" : ""}`}
+                    role="button"
+                    tabIndex={0}
                     onDragEnter={(e) => {
                       e.preventDefault();
                       dragCounter.current++;
@@ -1455,6 +1468,12 @@ export function RunConfigDrawer({
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={handleDropPopup}
                     onClick={() => void handleImportCollection()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        void handleImportCollection();
+                      }
+                    }}
                   >
                     <span className="drop-zone-icon">
                       <FolderOpen size={32} />
@@ -1606,9 +1625,16 @@ export function RunConfigDrawer({
               <div className="data-file-dropzone-text">{t("dataFileDrop")}</div>
               <div className="data-file-dropzone-sub">
                 {t("dataFileOr")}{" "}
-                <span className="data-file-dropzone-link">
+                <button
+                  type="button"
+                  className="data-file-dropzone-link"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void pickDataFile();
+                  }}
+                >
                   {t("dataFilePick")}
-                </span>
+                </button>
               </div>
               <div className="data-file-dropzone-formats">
                 <span className="data-file-format-badge">.json</span>
@@ -1642,6 +1668,7 @@ export function RunConfigDrawer({
               <button
                 className={`env-mode-btn${envMode === "postman" ? " env-mode-btn--active" : ""}`}
                 onClick={() => setEnvMode("postman")}
+                disabled={!!state.selectedLocalCollection}
               >
                 {t("postman")}
               </button>
@@ -1829,6 +1856,9 @@ function ManageSourcesDialog({
   const { t } = useTranslation();
   const [renamingKeyId, setRenamingKeyId] = useState<string | null>(null);
   const [renameKeyValue, setRenameKeyValue] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useFocusTrap(dialogRef, true);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1890,6 +1920,7 @@ function ManageSourcesDialog({
     <div className="popup-overlay" onMouseDown={onClose}>
       <div
         className="popup manage-sources-dialog"
+        ref={dialogRef}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="popup-header">
@@ -2066,16 +2097,38 @@ function useHoldRepeat(action: () => void, delay = 350, interval = 80) {
   stopRef.current = stop;
   useEffect(() => () => stopRef.current(), []);
 
-  function start(e: React.MouseEvent) {
-    if (e.button !== 0) return;
-    e.preventDefault();
+  function begin() {
     actionRef.current();
     timeoutRef.current = setTimeout(() => {
       intervalRef.current = setInterval(() => actionRef.current(), interval);
     }, delay);
   }
 
-  return { onMouseDown: start, onMouseUp: stop, onMouseLeave: stop };
+  function start(e: React.MouseEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    begin();
+  }
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== " " && e.key !== "Enter") return;
+    e.preventDefault();
+    if (e.repeat) return;
+    begin();
+  }
+
+  function onKeyUp(e: React.KeyboardEvent) {
+    if (e.key !== " " && e.key !== "Enter") return;
+    stop();
+  }
+
+  return {
+    onMouseDown: start,
+    onMouseUp: stop,
+    onMouseLeave: stop,
+    onKeyDown,
+    onKeyUp,
+  };
 }
 
 /* ── BreadcrumbChip ─────────────────────────────────────────────────────────── */

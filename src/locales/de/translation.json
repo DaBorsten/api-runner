@@ -20,6 +20,7 @@
   "checkForUpdates": "Nach Updates suchen",
   "checking": "Suche…",
   "installNow": "Jetzt installieren",
+  "openDownloadPage": "Download-Seite öffnen",
   "updateAvailable": "Version {{version}} verfügbar!",
   "upToDate": "Du bist auf dem neuesten Stand.",
   "updateFailed": "Prüfung fehlgeschlagen.",

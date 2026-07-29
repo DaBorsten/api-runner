@@ -1,12 +1,17 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { CheckCircle, Download, RefreshCw, X, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import type { ThemeMode } from "../hooks/useTheme";
 
 type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
+
+const RELEASES_URL = "https://github.com/DaBorsten/api-runner/releases/latest";
 
 interface SettingsPopupProps {
   theme: ThemeMode;
@@ -21,6 +26,7 @@ export function SettingsPopup({
 }: SettingsPopupProps) {
   const { t, i18n } = useTranslation();
   const overlayRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const pillRef = useRef<HTMLSpanElement>(null);
   const btnRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const langPillRef = useRef<HTMLSpanElement>(null);
@@ -50,6 +56,16 @@ export function SettingsPopup({
   const [isInstalling, setIsInstalling] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const [isClosing, setIsClosing] = useState(false);
+  // deb/rpm koennen sich nicht selbst ersetzen -> nur Link auf die Release-Seite
+  const [canSelfUpdate, setCanSelfUpdate] = useState(true);
+
+  useEffect(() => {
+    invoke<boolean>("can_self_update")
+      .then(setCanSelfUpdate)
+      .catch((e) => {
+        console.error("Failed to query self-update capability:", e);
+      });
+  }, []);
 
   const handleClose = useCallback(() => {
     setIsClosing(true);
@@ -71,6 +87,8 @@ export function SettingsPopup({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [handleClose]);
+
+  useFocusTrap(popupRef, !isClosing);
 
   // Animate theme segmented-control pill
   useEffect(() => {
@@ -118,6 +136,10 @@ export function SettingsPopup({
 
   async function handleInstall() {
     if (!pendingUpdate) return;
+    if (!canSelfUpdate) {
+      await openUrl(RELEASES_URL);
+      return;
+    }
     setIsInstalling(true);
     setDownloadProgress(0);
     try {
@@ -150,7 +172,7 @@ export function SettingsPopup({
         if (e.target === overlayRef.current) handleClose();
       }}
     >
-      <div className="sp-popup">
+      <div className="sp-popup" ref={popupRef}>
         {/* Header */}
         <div className="sp-header">
           <span className="sp-title">{t("settings")}</span>
@@ -246,7 +268,7 @@ export function SettingsPopup({
               onClick={() => void handleInstall()}
             >
               <Download size={13} />
-              {t("installNow")}
+              {canSelfUpdate ? t("installNow") : t("openDownloadPage")}
             </button>
           )}
 

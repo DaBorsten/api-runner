@@ -86,6 +86,7 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
   async function handleSave() {
     if (!inputKey.trim()) return;
     setSaving(true);
+    dispatch({ type: "CLEAR_ERROR" });
     try {
       const id = `key_${Date.now()}`;
       const label = inputLabel.trim() || "Postman Key";
@@ -135,6 +136,7 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
       }
       onNext();
     } catch (e: unknown) {
+      console.error("[ApiKeySetup] failed to save API key:", e);
       dispatch({ type: "SET_ERROR", payload: String(e) });
       setSaving(false);
     }
@@ -147,11 +149,19 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
       {/* Collection Drop Zone */}
       <div
         className={`drop-zone ${dragging ? "drop-zone--active" : ""}`}
+        role="button"
+        tabIndex={0}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
         onDrop={(e) => void handleDrop(e)}
         onClick={() => void handleImportCollection()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            void handleImportCollection();
+          }
+        }}
       >
         <span className="drop-zone-icon">
           <FolderOpen size={32} />
@@ -166,6 +176,8 @@ export function ApiKeySetup({ state, dispatch, onNext }: Props) {
       </div>
 
       <p className="step-desc">{t("apiKeyDesc")}</p>
+
+      {state.error && <div className="banner banner--error">{state.error}</div>}
 
       <div className="field-col">
         <input

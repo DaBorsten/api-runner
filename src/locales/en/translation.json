@@ -20,6 +20,7 @@
   "checkForUpdates": "Check for Updates",
   "checking": "Checking…",
   "installNow": "Install Now",
+  "openDownloadPage": "Open Download Page",
   "updateAvailable": "Version {{version}} available!",
   "upToDate": "You are up to date.",
   "updateFailed": "Check failed.",

@@ -15,6 +15,7 @@ import { RunConfigDrawer } from "./components/RunConfigDrawer";
 import { RunConsole } from "./components/RunConsole";
 import { RunSummary } from "./components/RunSummary";
 import { SettingsPopup } from "./components/SettingsPopup";
+import { useFocusTrap } from "./hooks/useFocusTrap";
 import { useNewmanRun } from "./hooks/useNewmanRun";
 import { usePostmanApi } from "./hooks/usePostmanApi";
 import { useTheme } from "./hooks/useTheme";
@@ -331,7 +332,9 @@ export default function App() {
   const [newmanInstalled, setNewmanInstalled] = useState<boolean | null>(null);
   const [newmanWarningOpen, setNewmanWarningOpen] = useState(false);
   const [newmanChecking, setNewmanChecking] = useState(false);
-  const newmanWarningCloseBtnRef = useRef<HTMLButtonElement>(null);
+  const newmanWarningDialogRef = useRef<HTMLDivElement>(null);
+  const renameDialogRef = useRef<HTMLDivElement>(null);
+  const confirmDialogRef = useRef<HTMLDivElement>(null);
 
   const checkNewmanInstalled = useCallback(() => {
     setNewmanChecking(true);
@@ -601,6 +604,9 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [confirmAction]);
 
+  useFocusTrap(confirmDialogRef, confirmAction !== null);
+  useFocusTrap(renameDialogRef, renamingId !== null);
+
   useEffect(() => {
     const heldKeys = new Set<string>();
     function onKeyDown(e: KeyboardEvent) {
@@ -632,20 +638,12 @@ export default function App() {
     if (!newmanWarningOpen) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") setNewmanWarningOpen(false);
-      else if (e.key === "Tab") {
-        // ponytail: only focusable element in this dialog is the close button, so trap = keep it focused
-        e.preventDefault();
-        newmanWarningCloseBtnRef.current?.focus();
-      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [newmanWarningOpen]);
 
-  useEffect(() => {
-    if (!newmanWarningOpen) return;
-    newmanWarningCloseBtnRef.current?.focus();
-  }, [newmanWarningOpen]);
+  useFocusTrap(newmanWarningDialogRef, newmanWarningOpen);
 
   function renderHistoryItem(run: RunHistoryEntry) {
     return (
@@ -974,6 +972,14 @@ export default function App() {
             />
           </div>
         </div>
+
+        {settingsOpen && (
+          <SettingsPopup
+            theme={themeMode}
+            onThemeChange={setThemeMode}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
       </div>
     );
   }
@@ -1183,6 +1189,7 @@ export default function App() {
         <div className="confirm-overlay" onClick={() => setRenamingId(null)}>
           <div
             className="confirm-dialog confirm-dialog--compact"
+            ref={renameDialogRef}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="confirm-message">{t("renameEntry")}</div>
@@ -1217,7 +1224,11 @@ export default function App() {
       {/* Confirmation dialog */}
       {confirmAction && (
         <div className="confirm-overlay" onClick={() => setConfirmAction(null)}>
-          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="confirm-dialog"
+            ref={confirmDialogRef}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="confirm-message">
               {confirmAction.type === "clear"
                 ? t("confirmClearHistory")
@@ -1273,7 +1284,11 @@ export default function App() {
           className="confirm-overlay"
           onClick={() => setNewmanWarningOpen(false)}
         >
-          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="confirm-dialog"
+            ref={newmanWarningDialogRef}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="confirm-message confirm-message--warning">
               <AlertTriangle size={16} />
               <div>
@@ -1283,7 +1298,6 @@ export default function App() {
             </div>
             <div className="confirm-actions">
               <button
-                ref={newmanWarningCloseBtnRef}
                 className="confirm-btn confirm-btn--cancel"
                 onClick={() => setNewmanWarningOpen(false)}
               >
