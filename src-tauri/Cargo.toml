@@ -1,6 +1,6 @@
 [package]
 name = "api-runner"
-version = "0.2.6"
+version = "0.2.7"
 description = "An application to run requests with test data"
 authors = ["you"]
 edition = "2021"
