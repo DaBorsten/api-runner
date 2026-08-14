@@ -8,12 +8,16 @@ void i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
-    fallbackLng: "de",
+    fallbackLng: "en",
     debug: import.meta.env.DEV,
     interpolation: { escapeValue: false },
     resources: {
       de: { translation: de },
       en: { translation: en },
+    },
+    detection: {
+      convertDetectedLanguage: (lng) =>
+        lng.toLowerCase().startsWith("de") ? "de" : "en",
     },
   });
 
