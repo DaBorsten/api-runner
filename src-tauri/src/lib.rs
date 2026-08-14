@@ -1462,7 +1462,112 @@ async fn cancel_newman(state: State<'_, AppState>) -> Result<(), String> {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// GUI-launched apps on Linux/macOS (AppImage, `.desktop` entry, Dock/Finder,
+/// ...) are spawned by the desktop environment, not a login shell, so they
+/// don't inherit `PATH` additions from `~/.bashrc`/`~/.zshrc`/nvm — even
+/// though those work fine when the app is started from a terminal (`cargo
+/// tauri dev`). That's why `newman` (installed via `npm i -g newman`, often
+/// under a nvm/npm-global dir) is invisible to `check_newman_installed` /
+/// `run_newman`'s bare `Command::new("newman")` lookup in the built app.
+/// Fix it once at startup by asking the user's actual login shell for its
+/// `PATH` and merging that in.
+/// `$SHELL` is only reliably set when a process descends from an actual
+/// login/terminal session. A GUI launch (AppImage double-click, `.desktop`
+/// entry via the app menu) often goes straight from the display manager /
+/// session manager to the app with `$SHELL` unset entirely, which used to
+/// make `fix_path_env` fall back to `/bin/sh` — and `sh` (usually `dash` on
+/// Linux) doesn't source `.bashrc`/`.zshrc`, so nvm's PATH export was never
+/// picked up. Look the user's real login shell up in the passwd database
+/// instead, which is what a terminal emulator itself does to pick a shell.
+#[cfg(not(windows))]
+fn login_shell() -> String {
+    if let Ok(shell) = std::env::var("SHELL") {
+        if !shell.is_empty() {
+            return shell;
+        }
+    }
+
+    let user = std::env::var("USER").or_else(|_| std::env::var("LOGNAME"));
+    if let Ok(user) = user {
+        if let Ok(output) = std::process::Command::new("getent")
+            .args(["passwd", &user])
+            .output()
+        {
+            if output.status.success() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    if let Some(shell) = text.trim_end().rsplit(':').next() {
+                        if !shell.is_empty() {
+                            return shell.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    "/bin/bash".to_string()
+}
+
+#[cfg(not(windows))]
+fn fix_path_env() {
+    use std::collections::HashSet;
+    use std::process::Command;
+
+    const START: &str = "___API_RUNNER_PATH_START___";
+    const END: &str = "___API_RUNNER_PATH_END___";
+
+    let shell = login_shell();
+    // `${{PATH}}` (braced) is required: with a bare `$PATH` immediately
+    // followed by `END` (which starts with `_`), bash/zsh greedily parse
+    // `$PATH___API_RUNNER_PATH_END___` as a single (unset, empty-expanding)
+    // variable name, so the END marker never appears in the output and the
+    // lookup below always fails.
+    let script = format!("echo \"{START}${{PATH}}{END}\"");
+
+    let output = match Command::new(&shell).args(["-ilc", &script]).output() {
+        Ok(o) if o.status.success() => o,
+        Ok(o) => {
+            eprintln!(
+                "[fix_path_env] `{shell} -ilc` exited with {}, stderr: {}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr)
+            );
+            return;
+        }
+        Err(e) => {
+            eprintln!("[fix_path_env] failed to spawn `{shell}`: {e}");
+            return;
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (Some(start), Some(end)) = (stdout.find(START), stdout.find(END)) else {
+        eprintln!("[fix_path_env] markers not found in `{shell}` output: {stdout:?}");
+        return;
+    };
+    let shell_path = &stdout[start + START.len()..end];
+    if shell_path.is_empty() {
+        eprintln!("[fix_path_env] `{shell}` reported an empty PATH");
+        return;
+    }
+
+    let current = std::env::var("PATH").unwrap_or_default();
+    let mut seen = HashSet::new();
+    let mut merged = Vec::new();
+    for entry in shell_path.split(':').chain(current.split(':')) {
+        if !entry.is_empty() && seen.insert(entry) {
+            merged.push(entry);
+        }
+    }
+    let merged = merged.join(":");
+    eprintln!("[fix_path_env] resolved PATH via `{shell}`: {merged}");
+    std::env::set_var("PATH", merged);
+}
+
 pub fn run() {
+    #[cfg(not(windows))]
+    fix_path_env();
+
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
