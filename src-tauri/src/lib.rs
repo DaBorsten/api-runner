@@ -1439,15 +1439,140 @@ async fn read_newman_json(state: State<'_, AppState>) -> Result<NewmanRunResult,
         .ok_or_else(|| "No run result available".to_string())
 }
 
+/// The OS color scheme, or `None` when this platform has no way to ask for it
+/// that beats what the webview already knows.
+///
+/// Only Linux needs this: WebKitGTK derives `prefers-color-scheme` from the
+/// *GTK* theme, which on desktops like GNOME 42+ says nothing about the
+/// system-wide dark preference (that one lives behind the desktop portal, and
+/// e.g. Ubuntu leaves `gtk-theme-name` on a light theme while the portal says
+/// `prefer-dark`). On Windows/macOS the webview's own media query is correct,
+/// so we return `None` and let the frontend use it.
+fn system_theme() -> Option<Theme> {
+    #[cfg(target_os = "linux")]
+    {
+        portal_color_scheme()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// `org.freedesktop.appearance color-scheme`: 0 = no preference, 1 = dark,
+/// 2 = light. Same source tao reads for `Window::theme()` — asked directly so
+/// that forcing a theme on the window doesn't hide the system value from us.
+#[cfg(target_os = "linux")]
+fn portal_color_scheme() -> Option<Theme> {
+    use dbus::{arg::Variant, blocking::Connection};
+
+    let conn = Connection::new_session().ok()?;
+    let proxy = conn.with_proxy(
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        Duration::from_secs(5),
+    );
+    let (value,): (Variant<Variant<u32>>,) = proxy
+        .method_call(
+            "org.freedesktop.portal.Settings",
+            "Read",
+            ("org.freedesktop.appearance", "color-scheme"),
+        )
+        .ok()?;
+
+    match value.0 .0 {
+        1 => Some(Theme::Dark),
+        2 => Some(Theme::Light),
+        _ => None,
+    }
+}
+
+/// The `gtk-theme-name` the app started with, so light mode can go back to it
+/// after dark mode had to replace it.
+#[cfg(target_os = "linux")]
+static ORIGINAL_GTK_THEME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Make the GTK-drawn window decorations (the title bar) match `dark`.
+///
+/// tao only flips `gtk-application-prefer-dark-theme`, which picks the *dark
+/// variant of the current GTK theme* — a no-op when that theme has no dark
+/// variant or isn't installed at all (GTK then silently falls back to light
+/// Adwaita). So we check what the theme actually resolved to and, if it's the
+/// wrong side, switch this process over to Adwaita, whose dark variant ships
+/// inside GTK itself.
+#[cfg(target_os = "linux")]
+fn sync_gtk_theme(app: &AppHandle, dark: bool) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        use gtk::prelude::*;
+
+        let Some(settings) = gtk::Settings::default() else {
+            return;
+        };
+        let original =
+            ORIGINAL_GTK_THEME.get_or_init(|| settings.gtk_theme_name().map(|s| s.to_string()));
+
+        // Always start from the user's own theme: it may well have a dark
+        // variant, and then it's the one they want to see.
+        settings.set_gtk_theme_name(original.as_deref());
+        settings.set_gtk_application_prefer_dark_theme(dark);
+
+        let Some(window) = handle
+            .get_webview_window("main")
+            .and_then(|w| w.gtk_window().ok())
+        else {
+            return;
+        };
+        if gtk_style_is_dark(&window) != dark {
+            settings.set_gtk_theme_name(Some("Adwaita"));
+        }
+    });
+}
+
+/// Whether the window currently renders dark, judged by the luminance of the
+/// theme's background colour.
+#[cfg(target_os = "linux")]
+fn gtk_style_is_dark(window: &gtk::ApplicationWindow) -> bool {
+    use gtk::prelude::*;
+
+    let ctx = window.style_context();
+    let luminance = |c: gtk::gdk::RGBA| 0.2126 * c.red() + 0.7152 * c.green() + 0.0722 * c.blue();
+
+    match ctx.lookup_color("theme_bg_color") {
+        Some(bg) => luminance(bg) < 0.5,
+        // No named colours (some minimal themes): fall back to the text
+        // colour, which runs the other way around.
+        None => luminance(ctx.color(gtk::StateFlags::NORMAL)) > 0.5,
+    }
+}
+
+/// Applies the theme the user picked (`light`, `dark` or `system`) to the
+/// native window and reports back which one that resolved to, so the frontend
+/// can style the webview to match. `None` means "couldn't tell" — the frontend
+/// then falls back to its own `prefers-color-scheme` query.
 #[tauri::command]
-fn set_window_theme(app: AppHandle, theme: String) -> Result<(), String> {
+fn set_window_theme(app: AppHandle, theme: String) -> Result<Option<String>, String> {
     let window = app.get_webview_window("main").ok_or("no main window")?;
-    let t = match theme.as_str() {
+    let resolved = match theme.as_str() {
         "light" => Some(Theme::Light),
         "dark" => Some(Theme::Dark),
-        _ => None, // system
+        _ => system_theme(),
     };
-    window.set_theme(t).map_err(|e| e.to_string())
+
+    // Passing `None` here means "follow the OS", which is what we want on
+    // Windows/macOS in system mode. On Linux it instead resets
+    // `gtk-application-prefer-dark-theme` to false — a light title bar on a
+    // dark desktop — which is why `system_theme` resolves it beforehand.
+    window.set_theme(resolved).map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "linux")]
+    sync_gtk_theme(&app, resolved == Some(Theme::Dark));
+
+    Ok(match resolved {
+        Some(Theme::Dark) => Some("dark".to_string()),
+        Some(Theme::Light) => Some("light".to_string()),
+        _ => None,
+    })
 }
 
 #[tauri::command]

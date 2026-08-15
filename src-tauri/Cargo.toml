@@ -31,3 +31,11 @@ tokio = { version = "1", features = ["full"] }
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 uuid = { version = "1", features = ["v4"] }
 
+# Theme handling on Linux: `dbus` reads the desktop portal's colour scheme
+# (WebKitGTK's `prefers-color-scheme` doesn't know about it), `gtk` fixes up the
+# window decorations. Both are already in the tree via keyring/tao — pinned to
+# the versions tauri itself uses so the `gtk` types stay compatible.
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9"
+gtk = "0.18"
+
