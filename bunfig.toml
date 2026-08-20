@@ -2,3 +2,4 @@
 # Block packages published less than 3 days ago (supply chain protection)
 minimumReleaseAge = 259200
 minimumReleaseAgeExcludes = ["@types/node", "typescript"]
+linker = "isolated"
