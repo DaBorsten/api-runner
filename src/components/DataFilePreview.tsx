@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Copy, Minus, Plus, RotateCcw, Search, X } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { type DataPreview } from "../types";
 
@@ -128,7 +135,7 @@ export const DataFilePreview = memo(function DataFilePreview({
 }: Props) {
   const { t } = useTranslation();
   const [loaded, setLoaded] = useState<DataPreview | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => !!path);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const headRef = useRef<HTMLInputElement>(null);
@@ -170,7 +177,7 @@ export const DataFilePreview = memo(function DataFilePreview({
   const [prevPath, setPrevPath] = useState(path);
   if (prevPath !== path) {
     setPrevPath(path);
-    setLoading(true);
+    setLoading(!!path);
     setError(null);
     setLoaded(null);
     setDraft(null);
@@ -179,10 +186,7 @@ export const DataFilePreview = memo(function DataFilePreview({
   useEffect(() => {
     let cancelled = false;
     lastIndexRef.current = null;
-    if (!path) {
-      setLoading(false);
-      return;
-    }
+    if (!path) return;
     invoke<DataPreview>("read_data_file", { path })
       .then((p) => {
         if (!cancelled) setLoaded(p);
@@ -220,7 +224,8 @@ export const DataFilePreview = memo(function DataFilePreview({
 
   // This render's data, for the stable callbacks below: they must not close
   // over state, or a memoized row would keep calling an outdated version.
-  // Filled in just before the JSX, so it is current whenever an event fires.
+  // Refreshed in a layout effect after every render, so it is current whenever
+  // an event fires.
   const latest = useRef({
     preview,
     selected,
@@ -230,9 +235,11 @@ export const DataFilePreview = memo(function DataFilePreview({
     onTableChange,
   });
   const draftRef = useRef(draft);
-  draftRef.current = draft;
   const onTableChangeRef = useRef(onTableChange);
-  onTableChangeRef.current = onTableChange;
+  useEffect(() => {
+    draftRef.current = draft;
+    onTableChangeRef.current = onTableChange;
+  });
 
   // Collapsed or closed with text still in the draft — don't drop it.
   useEffect(
@@ -354,6 +361,40 @@ export const DataFilePreview = memo(function DataFilePreview({
     change(next.length === rowTotal ? null : next);
   }, []);
 
+  // Computed before the early returns below so the hook after it always runs.
+  const previewRows = preview?.rows ?? [];
+  // While text is being typed, match against the last committed values instead
+  // of the draft — otherwise editing a matching cell into a non-matching one
+  // unmounts the row (and the focused input) after a single keystroke.
+  // Membership is re-evaluated on commit, i.e. once the user leaves the cell.
+  const matchRows = (draft ? (table ?? loaded)?.rows : null) ?? previewRows;
+  const filteredRows: { origIndex: number; cells: string[] }[] =
+    searchQuery.trim()
+      ? previewRows.reduce<{ origIndex: number; cells: string[] }[]>(
+          (acc, row, i) => {
+            const lower = searchQuery.toLowerCase();
+            const against = matchRows[i] ?? row;
+            if (against.some((cell) => cell.toLowerCase().includes(lower))) {
+              acc.push({ origIndex: i, cells: row });
+            }
+            return acc;
+          },
+          [],
+        )
+      : previewRows.map((row, i) => ({ origIndex: i, cells: row }));
+
+  const visible = filteredRows.map((r) => r.origIndex);
+  useLayoutEffect(() => {
+    latest.current = {
+      preview,
+      selected,
+      total,
+      visible,
+      onChange,
+      onTableChange,
+    };
+  });
+
   if (loading)
     return <div className="data-preview-status">{t("dataPreviewLoading")}</div>;
   if (error)
@@ -421,41 +462,12 @@ export const DataFilePreview = memo(function DataFilePreview({
     if (selected !== null) onChange([...selected, total]);
   }
 
-  // While text is being typed, match against the last committed values instead
-  // of the draft — otherwise editing a matching cell into a non-matching one
-  // unmounts the row (and the focused input) after a single keystroke.
-  // Membership is re-evaluated on commit, i.e. once the user leaves the cell.
-  const matchRows = (draft ? (table ?? loaded)?.rows : null) ?? preview.rows;
-  const filteredRows: Array<{ origIndex: number; cells: string[] }> =
-    searchQuery.trim()
-      ? preview.rows.reduce<Array<{ origIndex: number; cells: string[] }>>(
-          (acc, row, i) => {
-            const lower = searchQuery.toLowerCase();
-            const against = matchRows[i] ?? row;
-            if (against.some((cell) => cell.toLowerCase().includes(lower))) {
-              acc.push({ origIndex: i, cells: row });
-            }
-            return acc;
-          },
-          [],
-        )
-      : preview.rows.map((row, i) => ({ origIndex: i, cells: row }));
-
   const isRowSelected = (i: number) =>
     selected === null || selected.includes(i);
 
   function toggleAll() {
     onChange(allSelected ? [] : null);
   }
-
-  latest.current = {
-    preview,
-    selected,
-    total,
-    visible: filteredRows.map((r) => r.origIndex),
-    onChange,
-    onTableChange,
-  };
 
   return (
     <div className="data-preview">

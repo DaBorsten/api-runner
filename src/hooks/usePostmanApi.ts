@@ -63,7 +63,10 @@ function makePostmanApi() {
     label: string,
     key: string,
   ): Promise<void> {
-    await withTimeout(invoke("save_api_key", { id, label, key }), "save_api_key");
+    await withTimeout(
+      invoke("save_api_key", { id, label, key }),
+      "save_api_key",
+    );
   }
 
   async function renameApiKey(id: string, label: string): Promise<void> {

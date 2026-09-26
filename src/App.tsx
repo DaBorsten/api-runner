@@ -331,13 +331,13 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newmanInstalled, setNewmanInstalled] = useState<boolean | null>(null);
   const [newmanWarningOpen, setNewmanWarningOpen] = useState(false);
-  const [newmanChecking, setNewmanChecking] = useState(false);
+  // Starts true: the mount effect below runs the first check.
+  const [newmanChecking, setNewmanChecking] = useState(true);
   const newmanWarningDialogRef = useRef<HTMLDivElement>(null);
   const renameDialogRef = useRef<HTMLDivElement>(null);
   const confirmDialogRef = useRef<HTMLDivElement>(null);
 
-  const checkNewmanInstalled = useCallback(() => {
-    setNewmanChecking(true);
+  const runNewmanCheck = useCallback(() => {
     const minSpin = new Promise((resolve) => setTimeout(resolve, 700));
     Promise.allSettled([invoke<boolean>("check_newman_installed"), minSpin])
       .then(([result]) => {
@@ -351,16 +351,21 @@ export default function App() {
       .finally(() => setNewmanChecking(false));
   }, []);
 
+  const checkNewmanInstalled = useCallback(() => {
+    setNewmanChecking(true);
+    runNewmanCheck();
+  }, [runNewmanCheck]);
+
   useEffect(() => {
-    checkNewmanInstalled();
-  }, [checkNewmanInstalled]);
+    runNewmanCheck();
+  }, [runNewmanCheck]);
   const [history, setHistory] = useState<RunHistoryEntry[]>(() => {
     try {
       const stored = localStorage.getItem("api-runner-history");
       if (!stored) return [];
-      const parsed = JSON.parse(stored) as Array<
-        RunHistoryEntry & { timestamp: string }
-      >;
+      const parsed = JSON.parse(stored) as (RunHistoryEntry & {
+        timestamp: string;
+      })[];
       return parsed.map((e) => ({ ...e, timestamp: new Date(e.timestamp) }));
     } catch {
       return [];

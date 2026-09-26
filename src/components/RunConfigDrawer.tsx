@@ -381,12 +381,19 @@ export function RunConfigDrawer({
   >("idle");
   const [dataColumnCount, setDataColumnCount] = useState(0);
   const [envMode, setEnvMode] = useState<"postman" | "local">(
-    state.runConfig.envFile ? "local" : "postman",
+    state.runConfig.envFile || state.selectedLocalCollection
+      ? "local"
+      : "postman",
   );
 
-  useEffect(() => {
+  // Picking a local collection switches to local environments.
+  const [prevLocalCollection, setPrevLocalCollection] = useState(
+    state.selectedLocalCollection,
+  );
+  if (state.selectedLocalCollection !== prevLocalCollection) {
+    setPrevLocalCollection(state.selectedLocalCollection);
     if (state.selectedLocalCollection) setEnvMode("local");
-  }, [state.selectedLocalCollection]);
+  }
 
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     const stored = localStorage.getItem("config-right-width");
@@ -2094,7 +2101,9 @@ function useHoldRepeat(action: () => void, delay = 350, interval = 80) {
   }
 
   const stopRef = useRef(stop);
-  stopRef.current = stop;
+  useEffect(() => {
+    stopRef.current = stop;
+  });
   useEffect(() => () => stopRef.current(), []);
 
   function begin() {
