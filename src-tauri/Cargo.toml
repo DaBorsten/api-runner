@@ -30,6 +30,13 @@ reqwest = { version = "0.12", features = ["json", "native-tls"], default-feature
 tokio = { version = "1", features = ["full"] }
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 uuid = { version = "1", features = ["v4"] }
+# CLI mode has no AppHandle and resolves the app data dirs itself — the same
+# crate/version Tauri uses internally, so the paths match.
+dirs = "6"
+
+# CLI mode: attach to the parent console (release builds are GUI-subsystem).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 # Theme handling on Linux: `dbus` reads the desktop portal's colour scheme
 # (WebKitGTK's `prefers-color-scheme` doesn't know about it), `gtk` fixes up the

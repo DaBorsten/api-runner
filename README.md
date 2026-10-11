@@ -30,9 +30,15 @@ API Runner lets you execute Postman collections against multiple data rows witho
 - Browse workspaces, collections, and environments from your Postman account
 - Run collections with a CSV/JSON data file (one iteration per row)
 - Select specific requests or folders within a collection
+- Newman options: delay between requests, request timeout, stop at first failure, skip TLS checks, override environment variables
 - Live console output while Newman runs
-- Run summary with pass/fail counts per request
-- Run history within the session
+- Run summary with failed tests and their error messages, search and a "failures only" filter
+- Per-request details: resolved URL, request/response headers and bodies, test results
+- Response-time statistics per request (min / median / p95 / max)
+- Re-run only the data rows that failed
+- Export results as CSV or as a self-contained HTML report
+- Persistent run history; select two runs to compare them (new failures, fixes, slower/faster requests)
+- Saved run presets, runnable headless from the command line (see below)
 - Dark/light theme toggle
 - German and English UI (auto-detected)
 - Auto-updater built in
@@ -114,6 +120,20 @@ API keys and run settings are persisted locally via `tauri-plugin-store` — not
 ### Local collections
 
 Use **Open local collection** to load a `.json` file exported from Postman. No API key required.
+
+### Presets & command line
+
+In the run configuration, **Presets** saves the current setup (collection, environment, data file, selected requests/rows, options) under a name. Presets can be loaded back into the app, or run without opening the window:
+
+```bash
+api-runner presets                              # list saved presets
+api-runner run "Nightly smoke"                  # run a preset by name or id
+api-runner run "Nightly smoke" --report out.json --bail --env-var baseUrl=https://staging.example.com
+```
+
+Output is Newman's usual console output plus a one-line summary. Exit codes: `0` = everything passed, `1` = failed requests or tests, `2` = the run could not start (unknown preset, Newman missing, …). The copy button next to each preset puts the matching command on the clipboard.
+
+On Windows the app is a GUI program, so `cmd` and PowerShell don't wait for it by default. In scripts, use `start /wait api-runner.exe run …` (cmd) or `Start-Process api-runner.exe -ArgumentList 'run','Nightly smoke' -Wait -NoNewWindow` (PowerShell) to get the exit code.
 
 ---
 

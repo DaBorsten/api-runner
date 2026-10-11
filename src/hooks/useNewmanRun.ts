@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef } from "react";
-import type { AppAction, RunConfig } from "../types";
+import { type AppAction, DEFAULT_RUN_OPTIONS, type RunConfig } from "../types";
 
 export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
   const unlistenOutput = useRef<UnlistenFn | null>(null);
@@ -91,6 +91,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
         data_row_indices: config.dataRowIndices,
         data_table: config.dataTable,
         selected_request_ids: config.selectedRequestIds,
+        options: { ...DEFAULT_RUN_OPTIONS, ...config.options },
       },
     });
   }

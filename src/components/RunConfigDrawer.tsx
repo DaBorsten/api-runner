@@ -33,12 +33,15 @@ import {
   type DataPreview,
   isFolder,
   type LocalCollection,
+  type RunPreset,
   type SourceSnapshot,
   type WorkspaceSnapshot,
 } from "../types";
 import { confirmLocalCollectionTrust } from "../utils/collectionTrust";
 import { DataFilePreview } from "./DataFilePreview";
+import { PresetMenu } from "./PresetMenu";
 import { RequestBodyViewer } from "./RequestBodyViewer";
+import { RunOptionsSection } from "./RunOptionsSection";
 
 function hideEnvDropdown() {
   document.getElementById("env-dropdown-popover")?.hidePopover();
@@ -63,6 +66,10 @@ interface Props {
   fullPage?: boolean;
   snapshots?: Partial<Record<string, SourceSnapshot>>;
   syncStatus?: "idle" | "syncing" | "error";
+  presets: RunPreset[];
+  onSavePreset: (name: string) => void;
+  onDeletePreset: (id: string) => void;
+  onApplyPreset: (preset: RunPreset) => void;
 }
 
 // Collections whose content must be (re)fetched from the Postman API: brand
@@ -179,6 +186,10 @@ export function RunConfigDrawer({
   fullPage,
   snapshots,
   syncStatus,
+  presets,
+  onSavePreset,
+  onDeletePreset,
+  onApplyPreset,
 }: Props) {
   const { t } = useTranslation();
   const stateRef = useRef(state);
@@ -1347,6 +1358,16 @@ export function RunConfigDrawer({
       )}
 
       <div className="drawer-footer config-page-footer">
+        <PresetMenu
+          presets={presets}
+          canSave={
+            !!(state.selectedCollection ?? state.selectedLocalCollection)
+          }
+          defaultName={selectedName ?? ""}
+          onSave={onSavePreset}
+          onDelete={onDeletePreset}
+          onApply={onApplyPreset}
+        />
         <button className="btn" onClick={onClose}>
           {t("cancel")}
         </button>
@@ -1833,6 +1854,11 @@ export function RunConfigDrawer({
             </button>
           </div>
         </div>
+
+        <RunOptionsSection
+          options={cfg.options}
+          onChange={(options) => setConfig({ options })}
+        />
       </div>
     );
   }

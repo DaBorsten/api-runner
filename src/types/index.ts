@@ -86,6 +86,46 @@ export interface RunConfig {
   // Table edited in the preview (columns/rows/cells). `null` = use the file
   // as-is; set means the run uses this table instead of the file's contents.
   dataTable: DataPreview | null;
+  // Extra newman flags. Optional so history entries and presets saved before
+  // this field existed still load; `DEFAULT_RUN_OPTIONS` fills the gaps.
+  options?: RunOptions;
+}
+
+export interface EnvVarOverride {
+  key: string;
+  value: string;
+}
+
+// Mirrors `RunOptions` in src-tauri/src/runner/newman.rs (camelCase on the wire).
+export interface RunOptions {
+  delayRequest: number | null;
+  timeoutRequest: number | null;
+  bail: boolean;
+  insecure: boolean;
+  envVars: EnvVarOverride[];
+}
+
+export const DEFAULT_RUN_OPTIONS: RunOptions = {
+  delayRequest: null,
+  timeoutRequest: null,
+  bail: false,
+  insecure: false,
+  envVars: [],
+};
+
+// A named, saved run configuration. Stored as JSON by the backend
+// (`get_presets`/`save_presets`) and read by the headless CLI
+// (`api-runner run <preset>`), so keep field names in sync with `cli::Preset`.
+export interface RunPreset {
+  id: string;
+  name: string;
+  createdAt: number;
+  runConfig: RunConfig;
+  activeApiKeyId: string | null;
+  selectedWorkspace: string | null;
+  selectedCollection: Collection | null;
+  selectedLocalCollection: LocalCollection | null;
+  selectedEnvironmentUid: string | null;
 }
 
 // Tabular preview of a CSV/JSON data file, returned by the `read_data_file`
@@ -103,14 +143,37 @@ export interface RunSummary {
   failed: number;
 }
 
+export interface Header {
+  key: string;
+  value: string;
+}
+
+export interface AssertionResult {
+  name: string;
+  // Failure message; `null` = passed (or skipped).
+  error: string | null;
+  skipped: boolean;
+}
+
 export interface RequestResult {
   name: string;
   method: string;
+  // As sent, with `{{variables}}` resolved.
   url: string;
+  // 0 when no response arrived (see `error`).
   status: number;
   response_time: number;
   response_body: string;
   iteration: number;
+  // The fields below are optional so history entries recorded before they
+  // existed still load.
+  assertions?: AssertionResult[];
+  // Transport-level failure (connection refused, timeout, DNS, ...).
+  error?: string | null;
+  request_headers?: Header[];
+  request_body?: string;
+  response_headers?: Header[];
+  response_truncated?: boolean;
 }
 
 // Authoritative run statistics from newman's JSON report (`run.stats` /

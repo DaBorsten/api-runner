@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
+  GitCompare,
   Play,
   RefreshCw,
   Settings,
@@ -12,6 +13,7 @@ import { useTranslation } from "react-i18next";
 import "./App.css";
 import { ApiKeySetup } from "./components/ApiKeySetup";
 import { RunConfigDrawer } from "./components/RunConfigDrawer";
+import { RunCompare } from "./components/RunCompare";
 import { RunConsole } from "./components/RunConsole";
 import { RunSummary } from "./components/RunSummary";
 import { SettingsPopup } from "./components/SettingsPopup";
@@ -19,14 +21,17 @@ import { useFocusTrap } from "./hooks/useFocusTrap";
 import { useNewmanRun } from "./hooks/useNewmanRun";
 import { usePostmanApi } from "./hooks/usePostmanApi";
 import { useTheme } from "./hooks/useTheme";
+import { runMetaLabel } from "./utils/runResults";
 import {
   type AppAction,
   type AppState,
   type Collection,
+  DEFAULT_RUN_OPTIONS,
   type LocalCollection,
   type NewmanRunResult,
   type PostmanEnvironment,
   type RequestResult,
+  type RunPreset,
 } from "./types";
 
 const initialState: AppState = {
@@ -50,6 +55,7 @@ const initialState: AppState = {
     selectedRequestIds: null,
     dataRowIndices: null,
     dataTable: null,
+    options: DEFAULT_RUN_OPTIONS,
   },
   runStatus: "idle",
   outputLines: [],
@@ -372,6 +378,52 @@ export default function App() {
     }
   });
   const [selectedRun, setSelectedRun] = useState<RunHistoryEntry | null>(null);
+  // [baseline, candidate] history ids while the compare view is open.
+  const [compareIds, setCompareIds] = useState<[number, number] | null>(null);
+  const [presets, setPresets] = useState<RunPreset[]>([]);
+
+  useEffect(() => {
+    invoke<RunPreset[]>("get_presets")
+      .then(setPresets)
+      .catch((err) => console.error("[presets] failed to load:", err));
+  }, []);
+
+  function persistPresets(next: RunPreset[]) {
+    setPresets(next);
+    invoke("save_presets", { presets: next }).catch((err: unknown) => {
+      console.error("[presets] failed to save:", err);
+      dispatch({ type: "SET_ERROR", payload: String(err) });
+    });
+  }
+
+  // Saving under an existing name overwrites that preset (keeping its id, so
+  // CLI invocations that reference the id keep working).
+  function savePreset(name: string) {
+    const s = stateRef.current;
+    const existing = presets.find(
+      (p) => p.name.toLowerCase() === name.toLowerCase(),
+    );
+    const preset: RunPreset = {
+      id: existing?.id ?? crypto.randomUUID(),
+      name,
+      createdAt: Date.now(),
+      runConfig: { ...s.runConfig },
+      activeApiKeyId: s.selectedLocalCollection ? null : s.activeApiKeyId,
+      selectedWorkspace: s.selectedWorkspace,
+      selectedCollection: s.selectedCollection,
+      selectedLocalCollection: s.selectedLocalCollection,
+      selectedEnvironmentUid: s.selectedEnvironmentUid,
+    };
+    persistPresets(
+      existing
+        ? presets.map((p) => (p.id === existing.id ? preset : p))
+        : [...presets, preset],
+    );
+  }
+
+  function deletePreset(id: string) {
+    persistPresets(presets.filter((p) => p.id !== id));
+  }
   const [setupMode, setSetupMode] = useState(false);
   const [confirmAction, setConfirmAction] = useState<
     | { type: "clear" }
@@ -432,8 +484,15 @@ export default function App() {
     const capped = history.map((e) => ({
       ...e,
       requestResults: e.requestResults.map((r) =>
-        r.response_body.length > MAX_BODY
-          ? { ...r, response_body: r.response_body.slice(0, MAX_BODY) }
+        r.response_body.length > MAX_BODY ||
+        (r.request_body?.length ?? 0) > MAX_BODY
+          ? {
+              ...r,
+              response_body: r.response_body.slice(0, MAX_BODY),
+              request_body: r.request_body?.slice(0, MAX_BODY),
+              response_truncated:
+                r.response_truncated || r.response_body.length > MAX_BODY,
+            }
           : r,
       ),
     }));
@@ -597,6 +656,7 @@ export default function App() {
     }
     setSelectedIds(new Set());
     setSelectedRun(run);
+    setCompareIds(null);
     lastClickedId.current = run.id;
   }
 
@@ -651,10 +711,14 @@ export default function App() {
   useFocusTrap(newmanWarningDialogRef, newmanWarningOpen);
 
   function renderHistoryItem(run: RunHistoryEntry) {
+    // While comparing, the two compared runs are the ones on screen.
+    const active = comparing
+      ? compareIds!.includes(run.id)
+      : selectedRun?.id === run.id;
     return (
       <div
         key={run.id}
-        className={`history-item ${selectedRun?.id === run.id ? "history-item--active" : ""} ${selectedIds.has(run.id) ? "history-item--selected" : ""} ${deletingIds.has(run.id) ? "history-item--deleting" : ""}`}
+        className={`history-item ${active ? "history-item--active" : ""} ${selectedIds.has(run.id) ? "history-item--selected" : ""} ${deletingIds.has(run.id) ? "history-item--deleting" : ""}`}
         onClick={(e) => handleHistoryItemClick(run, e)}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -682,10 +746,7 @@ export default function App() {
             <X size={12} />
           </button>
         </div>
-        <div className="history-item-meta">
-          {run.total} iter · {(run.duration / 1000).toFixed(1)}s
-          {run.failed > 0 ? ` · ${run.failed} fail` : ""}
-        </div>
+        <div className="history-item-meta">{runMetaLabel(run)}</div>
       </div>
     );
   }
@@ -891,7 +952,16 @@ export default function App() {
     }
   }, [hasAnySource]);
 
-  function handleRerun(entry: RunHistoryEntry) {
+  // Restore everything a history entry or preset needs to run again: source,
+  // collection, environment and run config.
+  function restoreRunContext(entry: {
+    activeApiKeyId: string | null;
+    selectedWorkspace: string | null;
+    selectedCollection: Collection | null;
+    selectedLocalCollection: LocalCollection | null;
+    selectedEnvironmentUid: string | null;
+    runConfig: AppState["runConfig"];
+  }) {
     const keyId = entry.activeApiKeyId ?? null;
     const wsId = entry.selectedWorkspace ?? null;
     let collections: Collection[] = [];
@@ -912,13 +982,54 @@ export default function App() {
         selectedCollection: entry.selectedCollection ?? null,
         selectedLocalCollection: entry.selectedLocalCollection ?? null,
         selectedEnvironmentUid: entry.selectedEnvironmentUid,
-        runConfig: entry.runConfig,
+        runConfig: {
+          ...entry.runConfig,
+          options: { ...DEFAULT_RUN_OPTIONS, ...entry.runConfig.options },
+        },
         collections,
         environments,
       },
     });
+  }
+
+  function handleRerun(entry: RunHistoryEntry) {
+    restoreRunContext(entry);
     setConfigOpen(true);
   }
+
+  // Re-run only the data rows whose iteration had a failure. Opens the config
+  // with those rows pre-selected so the user can still adjust before running.
+  function handleRerunFailed(entry: RunHistoryEntry, rows: number[]) {
+    restoreRunContext({
+      ...entry,
+      // The drawer only re-syncs iterations when the selection changes while
+      // it is mounted, so set the count here.
+      runConfig: {
+        ...entry.runConfig,
+        dataRowIndices: rows,
+        iterations: rows.length,
+      },
+    });
+    setConfigOpen(true);
+  }
+
+  function startCompare() {
+    // The older of the two selected runs is the baseline.
+    const [a, b] = history
+      .filter((h) => selectedIds.has(h.id))
+      .sort((x, y) => x.timestamp.getTime() - y.timestamp.getTime());
+    if (!a || !b) return;
+    setCompareIds([a.id, b.id]);
+    setSelectedIds(new Set());
+  }
+
+  const compareBaseline = compareIds
+    ? history.find((h) => h.id === compareIds[0])
+    : undefined;
+  const compareCandidate = compareIds
+    ? history.find((h) => h.id === compareIds[1])
+    : undefined;
+  const comparing = !!(compareBaseline && compareCandidate);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -1042,17 +1153,30 @@ export default function App() {
               <span className="history-count-chip">{history.length}</span>
             </div>
             {selectedIds.size > 0 ? (
-              <button
-                className="history-clear-btn"
-                onClick={() => {
-                  if (skipDeleteConfirm) deleteSelectedEntries();
-                  else setConfirmAction({ type: "deleteSelected" });
-                }}
-                title={t("deleteEntry")}
-              >
-                <Trash2 size={12} />
-                {t("deleteSelected", { count: selectedIds.size })}
-              </button>
+              <div className="history-header-actions">
+                {selectedIds.size === 2 && (
+                  <button
+                    className="history-clear-btn history-compare-btn"
+                    onClick={startCompare}
+                    title={t("compareRunsTitle")}
+                  >
+                    <GitCompare size={12} />
+                    {t("compare")}
+                  </button>
+                )}
+                <button
+                  className="history-clear-btn"
+                  onClick={() => {
+                    if (skipDeleteConfirm) deleteSelectedEntries();
+                    else setConfirmAction({ type: "deleteSelected" });
+                  }}
+                  title={t("deleteSelected", { count: selectedIds.size })}
+                  aria-label={t("deleteSelected", { count: selectedIds.size })}
+                >
+                  <Trash2 size={12} />
+                  {selectedIds.size}
+                </button>
+              </div>
             ) : (
               history.length > 0 && (
                 <button
@@ -1138,16 +1262,29 @@ export default function App() {
               onBack={() => dispatch({ type: "SET_STEP", payload: 1 })}
             />
           )}
-          {(state.step === 4 || selectedRun) && state.step !== 3 && (
-            <RunSummary
-              run={selectedRun}
-              state={state}
-              dispatch={dispatch}
-              onNewRun={handleNewRun}
-              onRerun={handleRerun}
+          {state.step !== 3 && compareBaseline && compareCandidate && (
+            <RunCompare
+              baseline={compareBaseline}
+              candidate={compareCandidate}
+              onSwap={() =>
+                setCompareIds((ids) => (ids ? [ids[1], ids[0]] : ids))
+              }
+              onClose={() => setCompareIds(null)}
             />
           )}
-          {state.step !== 3 && !selectedRun && (
+          {(state.step === 4 || selectedRun) &&
+            state.step !== 3 &&
+            !comparing && (
+              <RunSummary
+                run={selectedRun}
+                state={state}
+                dispatch={dispatch}
+                onNewRun={handleNewRun}
+                onRerun={handleRerun}
+                onRerunFailed={handleRerunFailed}
+              />
+            )}
+          {state.step !== 3 && !selectedRun && !comparing && (
             <div className="main-empty">
               <div className="main-empty-icon">
                 <Play size={40} />
@@ -1176,6 +1313,10 @@ export default function App() {
             fullPage
             snapshots={state.snapshots}
             syncStatus={state.syncStatus}
+            presets={presets}
+            onSavePreset={savePreset}
+            onDeletePreset={deletePreset}
+            onApplyPreset={restoreRunContext}
           />
         </div>
       )}

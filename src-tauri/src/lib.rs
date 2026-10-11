@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State, Theme};
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
 
+mod cli;
 mod runner;
 pub use runner::report::{NewmanRunResult, RequestResult, RunStats};
 
@@ -88,6 +89,9 @@ pub struct NewmanPayload {
     /// changed cells). When present it replaces the on-disk data file — the
     /// original file is never written to.
     pub data_table: Option<DataTableInput>,
+    /// Extra newman flags (delay, timeout, bail, insecure, env-var overrides).
+    #[serde(default)]
+    pub options: runner::newman::RunOptions,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -274,6 +278,12 @@ const STORE_FILE: &str = "api-runner.bin";
 const KEY_API_KEYS: &str = "api_keys";
 const KEY_LOCAL_COLLECTIONS: &str = "local_collections";
 const KEYRING_SERVICE: &str = "com.daborsten.api-runner";
+/// Must match `identifier` in tauri.conf.json: the CLI has no `AppHandle` and
+/// rebuilds the app data dir from it (see `cli::app_data_dir`).
+const APP_IDENTIFIER: &str = "com.daborsten.api-runner";
+/// Run presets live in a plain JSON file (not the store plugin's file) so the
+/// CLI can read them without a running Tauri app.
+const PRESETS_FILE: &str = "presets.json";
 /// Hard cap on the size of a local collection file we will read into memory.
 const MAX_COLLECTION_BYTES: u64 = 64 * 1024 * 1024;
 /// Maximum folder nesting we will descend when parsing a collection, to guard
@@ -316,6 +326,7 @@ fn runs_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())?
         .join("runs");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    cleanup_runs_dir(&dir);
     Ok(dir)
 }
 
@@ -336,11 +347,10 @@ fn cleanup_runs_dir(dir: &Path) {
     }
 }
 
-/// Build a non-predictable path inside the user-private runs dir.
-fn secure_temp_path(app: &AppHandle, prefix: &str, ext: &str) -> Result<PathBuf, String> {
-    let dir = runs_dir(app)?;
-    cleanup_runs_dir(&dir);
-    Ok(dir.join(format!("{}_{}.{}", prefix, Uuid::new_v4(), ext)))
+/// Build a non-predictable path inside `dir` (the user-private runs dir, or
+/// the CLI's per-invocation scratch dir).
+fn temp_path_in(dir: &Path, prefix: &str, ext: &str) -> PathBuf {
+    dir.join(format!("{}_{}.{}", prefix, Uuid::new_v4(), ext))
 }
 
 // ── Commands: API keys ──────────────────────────────────────────────────────────
@@ -695,13 +705,23 @@ async fn export_environment(
     api_key_id: String,
     environment_uid: String,
 ) -> Result<String, String> {
-    let api_key = resolve_api_key(&api_key_id)?;
+    download_environment(&state.http, &api_key_id, &environment_uid, &runs_dir(&app)?).await
+}
+
+/// Fetch an environment from the Postman API and write it as a newman `-e`
+/// file into `dir`. Returns the file path.
+async fn download_environment(
+    http: &reqwest::Client,
+    api_key_id: &str,
+    environment_uid: &str,
+    dir: &Path,
+) -> Result<String, String> {
+    let api_key = resolve_api_key(api_key_id)?;
     let url = format!(
         "https://api.getpostman.com/environments/{}",
         environment_uid
     );
-    let resp = state
-        .http
+    let resp = http
         .get(&url)
         .header("X-API-Key", &api_key)
         .send()
@@ -740,7 +760,7 @@ async fn export_environment(
         .environment
         .name
         .clone()
-        .unwrap_or_else(|| environment_uid.clone());
+        .unwrap_or_else(|| environment_uid.to_string());
     let env_json = serde_json::json!({
         "id": environment_uid,
         "name": env_name,
@@ -748,7 +768,7 @@ async fn export_environment(
         "_postman_variable_scope": "environment"
     });
 
-    let tmp_path = secure_temp_path(&app, "env", "json")?;
+    let tmp_path = temp_path_in(dir, "env", "json");
     tokio::fs::write(
         &tmp_path,
         serde_json::to_string(&env_json).map_err(|e| e.to_string())?,
@@ -895,7 +915,7 @@ fn filter_collection_items(
 /// ids, and write the result to a fresh temp file. Returns the temp file path so
 /// the caller can hand it to newman in place of the original collection.
 async fn write_filtered_collection(
-    app: &AppHandle,
+    dir: &Path,
     collection_path: &str,
     selected: &std::collections::HashSet<String>,
 ) -> Result<String, String> {
@@ -916,7 +936,7 @@ async fn write_filtered_collection(
         filter_collection_items(arr, "", selected);
     }
 
-    let tmp_path = secure_temp_path(app, "collection_filtered", "json")?;
+    let tmp_path = temp_path_in(dir, "collection_filtered", "json");
     tokio::fs::write(
         &tmp_path,
         serde_json::to_string(&root).map_err(|e| e.to_string())?,
@@ -932,7 +952,7 @@ async fn write_filtered_collection(
 /// Returns the temp file path so the caller can hand it to newman in place of
 /// the original data file.
 async fn write_filtered_data_file(
-    app: &AppHandle,
+    dir: &Path,
     data_file_path: &str,
     selected: &[usize],
 ) -> Result<String, String> {
@@ -952,7 +972,7 @@ async fn write_filtered_data_file(
             .into_iter()
             .filter_map(|i| values.get(i).cloned())
             .collect();
-        let tmp_path = secure_temp_path(app, "data_filtered", "json")?;
+        let tmp_path = temp_path_in(dir, "data_filtered", "json");
         tokio::fs::write(
             &tmp_path,
             serde_json::to_string(&kept).map_err(|e| e.to_string())?,
@@ -963,7 +983,7 @@ async fn write_filtered_data_file(
     } else {
         let records = split_csv_records(trimmed);
         if records.is_empty() {
-            let tmp_path = secure_temp_path(app, "data_filtered", "csv")?;
+            let tmp_path = temp_path_in(dir, "data_filtered", "csv");
             tokio::fs::write(&tmp_path, "")
                 .await
                 .map_err(|e| e.to_string())?;
@@ -977,7 +997,7 @@ async fn write_filtered_data_file(
                 out_lines.push(row.as_str());
             }
         }
-        let tmp_path = secure_temp_path(app, "data_filtered", "csv")?;
+        let tmp_path = temp_path_in(dir, "data_filtered", "csv");
         tokio::fs::write(&tmp_path, out_lines.join("\n"))
             .await
             .map_err(|e| e.to_string())?;
@@ -1122,7 +1142,7 @@ fn render_data_table(
 /// file's extension so newman parses it the same way; a table built from
 /// scratch (empty path) is CSV. The original file is left untouched.
 async fn write_data_table(
-    app: &AppHandle,
+    dir: &Path,
     original_path: &str,
     table: &DataTableInput,
     selected: Option<&[usize]>,
@@ -1138,7 +1158,7 @@ async fn write_data_table(
         false => None,
     };
     let content = render_data_table(table, selected, as_json, original.as_ref())?;
-    let tmp_path = secure_temp_path(app, "data_edited", if as_json { "json" } else { "csv" })?;
+    let tmp_path = temp_path_in(dir, "data_edited", if as_json { "json" } else { "csv" });
     tokio::fs::write(&tmp_path, content)
         .await
         .map_err(|e| e.to_string())?;
@@ -1177,10 +1197,19 @@ async fn export_collection(
     api_key_id: String,
     collection_uid: String,
 ) -> Result<String, String> {
-    let api_key = resolve_api_key(&api_key_id)?;
+    download_collection(&state.http, &api_key_id, &collection_uid, &runs_dir(&app)?).await
+}
+
+/// Fetch a collection from the Postman API into `dir`. Returns the file path.
+async fn download_collection(
+    http: &reqwest::Client,
+    api_key_id: &str,
+    collection_uid: &str,
+    dir: &Path,
+) -> Result<String, String> {
+    let api_key = resolve_api_key(api_key_id)?;
     let url = format!("https://api.getpostman.com/collections/{}", collection_uid);
-    let resp = state
-        .http
+    let resp = http
         .get(&url)
         .header("X-API-Key", &api_key)
         .send()
@@ -1192,7 +1221,7 @@ async fn export_collection(
     }
 
     let json_text = resp.text().await.map_err(|e| e.to_string())?;
-    let tmp_path = secure_temp_path(&app, "collection", "json")?;
+    let tmp_path = temp_path_in(dir, "collection", "json");
     tokio::fs::write(&tmp_path, &json_text)
         .await
         .map_err(|e| e.to_string())?;
@@ -1320,28 +1349,20 @@ async fn read_data_file(path: String) -> Result<DataPreview, String> {
     }
 }
 
-#[tauri::command]
-async fn run_newman(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    payload: NewmanPayload,
-) -> Result<(), String> {
-    // If a previous run is still in flight, supersede it.
-    if state.running.load(Ordering::SeqCst) {
-        stop_current(&state);
-    }
-    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    state.running.store(true, Ordering::SeqCst);
-    // Drop the previous run's result so a run that fails before writing a new one
-    // can't make `read_newman_json` hand the frontend stale numbers.
-    *state.last_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
-
+/// Turn the payload's selections into the files newman actually runs: the
+/// collection pruned to the ticked requests, and the data file pruned to the
+/// ticked rows (or the edited table written out). Temp files go into `dir`.
+/// Shared by the GUI (`run_newman`) and the CLI.
+async fn prepare_run_inputs(
+    dir: &Path,
+    payload: &NewmanPayload,
+) -> Result<(String, Option<String>), String> {
     // When the user ticked a subset of requests, prune the collection to just
     // those before running.
     let collection_path = match &payload.selected_request_ids {
         Some(ids) if !ids.is_empty() => {
             let set: std::collections::HashSet<String> = ids.iter().cloned().collect();
-            write_filtered_collection(&app, &payload.collection_path, &set).await?
+            write_filtered_collection(dir, &payload.collection_path, &set).await?
         }
         _ => payload.collection_path.clone(),
     };
@@ -1372,7 +1393,7 @@ async fn run_newman(
         // as CSV, which the empty path falls through to.
         (data_file, Some(table), indices) => Some(
             write_data_table(
-                &app,
+                dir,
                 data_file.as_deref().unwrap_or(""),
                 table,
                 indices.as_deref(),
@@ -1380,25 +1401,43 @@ async fn run_newman(
             .await?,
         ),
         (Some(data_file), None, Some(indices)) => {
-            Some(write_filtered_data_file(&app, data_file, indices).await?)
+            Some(write_filtered_data_file(dir, data_file, indices).await?)
         }
         (data_file, _, _) => data_file.clone(),
     };
 
+    Ok((collection_path, data_file_path))
+}
+
+#[tauri::command]
+async fn run_newman(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    payload: NewmanPayload,
+) -> Result<(), String> {
+    // If a previous run is still in flight, supersede it.
+    if state.running.load(Ordering::SeqCst) {
+        stop_current(&state);
+    }
+    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    state.running.store(true, Ordering::SeqCst);
+    // Drop the previous run's result so a run that fails before writing a new one
+    // can't make `read_newman_json` hand the frontend stale numbers.
+    *state.last_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
+    let dir = runs_dir(&app)?;
+    let (collection_path, data_file_path) = prepare_run_inputs(&dir, &payload).await?;
+
     let app_for_task = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app_for_task.state::<AppState>();
-        let report_path = match secure_temp_path(&app_for_task, "newman_report", "json") {
-            Ok(p) => p,
-            Err(e) => {
-                let _ = app_for_task.emit("newman://output", format!("✗ {e}"));
-                let _ = app_for_task.emit("newman://done", 1_i32);
-                state.running.store(false, Ordering::SeqCst);
-                return;
-            }
-        };
+        let report_path = temp_path_in(&dir, "newman_report", "json");
+        let app_for_sink = app_for_task.clone();
+        let sink: runner::newman::OutputSink = std::sync::Arc::new(move |line| {
+            let _ = app_for_sink.emit("newman://output", line);
+        });
         let result = runner::newman::run(
-            &app_for_task,
+            sink,
             &report_path.to_string_lossy(),
             runner::newman::NewmanArgs {
                 collection_path: &collection_path,
@@ -1406,6 +1445,7 @@ async fn run_newman(
                 data_file: data_file_path.as_deref(),
                 env_file: payload.env_file.as_deref(),
                 iterations: payload.iterations,
+                options: &payload.options,
             },
         )
         .await;
@@ -1427,6 +1467,81 @@ async fn run_newman(
     });
 
     Ok(())
+}
+
+// ── Commands: presets & export ──────────────────────────────────────────────────
+
+fn presets_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(PRESETS_FILE))
+}
+
+/// Presets are opaque to the GUI side — the frontend owns their shape; only
+/// the CLI (`cli::Preset`) picks fields out of them.
+fn read_presets_file(path: &Path) -> Result<Vec<serde_json::Value>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => serde_json::from_str(&content).map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn get_presets(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    read_presets_file(&presets_path(&app)?)
+}
+
+#[tauri::command]
+async fn save_presets(app: AppHandle, presets: Vec<serde_json::Value>) -> Result<(), String> {
+    let path = presets_path(&app)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    // Write-then-rename so a crash mid-write can't leave a truncated file.
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(&presets).map_err(|e| e.to_string())?;
+    tokio::fs::write(&tmp, json)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::fs::rename(&tmp, &path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Ask the user where to save an exported report, then write `content` there.
+/// The dialog runs on the Rust side so the webview never gets a command that
+/// writes to an arbitrary path. Returns `false` if the dialog was cancelled.
+#[tauri::command]
+async fn save_export_file(
+    app: AppHandle,
+    default_name: String,
+    filter_name: String,
+    extension: String,
+    content: String,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name(&default_name)
+        .add_filter(&filter_name, &[extension.as_str()])
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let Some(path) = rx.await.map_err(|e| e.to_string())? else {
+        return Ok(false);
+    };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    tokio::fs::write(&path, content)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -1690,6 +1805,12 @@ fn fix_path_env() {
 }
 
 pub fn run() {
+    // `api-runner run <preset>` & co. run headless and exit; the terminal they
+    // were started from already has the right PATH, so no fix_path_env here.
+    if let Some(code) = cli::try_run(std::env::args().skip(1).collect()) {
+        std::process::exit(code);
+    }
+
     #[cfg(not(windows))]
     fix_path_env();
 
@@ -1733,6 +1854,9 @@ pub fn run() {
             run_newman,
             read_newman_json,
             cancel_newman,
+            get_presets,
+            save_presets,
+            save_export_file,
             set_window_theme,
         ])
         .build(tauri::generate_context!())
