@@ -46,3 +46,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 dbus = "0.9"
 gtk = "0.18"
 
+
+[lints.rust]
+# MSVC prints "Bibliothek ... werden erstellt" on a German system; rustc only filters the English text
+linker_messages = "allow"
