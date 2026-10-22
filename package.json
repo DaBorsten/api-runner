@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "oxlint src/",
-    "format": "oxfmt src/",
+    "format": "bun fmt src/",
     "tauri": "tauri",
     "bump": "bun scripts/bump.ts"
   },
@@ -35,7 +35,6 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "oxc-transform-react": "^0.154.0",
-    "oxfmt": "^0.73.0",
     "oxlint": "^1.88.0",
     "typescript": "~7.0.2",
     "vite": "^8.3.4"
