@@ -143,14 +143,16 @@ export function SettingsPopup({
     setIsInstalling(true);
     setDownloadProgress(0);
     try {
-      let downloaded = 0;
-      let total = 0;
+      const progress = { downloaded: 0, total: 0 };
       await pendingUpdate.downloadAndInstall((event) => {
-        if (event.event === "Started") total = event.data.contentLength ?? 0;
+        if (event.event === "Started")
+          progress.total = event.data.contentLength ?? 0;
         else if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-          if (total > 0)
-            setDownloadProgress(Math.round((downloaded / total) * 100));
+          progress.downloaded += event.data.chunkLength;
+          if (progress.total > 0)
+            setDownloadProgress(
+              Math.round((progress.downloaded / progress.total) * 100),
+            );
         }
       });
       await relaunch();

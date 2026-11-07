@@ -2198,19 +2198,21 @@ function BreadcrumbChip({
 
   useEffect(() => {
     if (!open) return;
-    let downOutside = false;
+    const press = { downOutside: false };
     function onDown(e: MouseEvent) {
-      downOutside = !!(ref.current && !ref.current.contains(e.target as Node));
+      press.downOutside = !!(
+        ref.current && !ref.current.contains(e.target as Node)
+      );
     }
     function onUp(e: MouseEvent) {
       if (
-        downOutside &&
+        press.downOutside &&
         ref.current &&
         !ref.current.contains(e.target as Node)
       ) {
         onClose();
       }
-      downOutside = false;
+      press.downOutside = false;
     }
     document.addEventListener("mousedown", onDown);
     document.addEventListener("mouseup", onUp);

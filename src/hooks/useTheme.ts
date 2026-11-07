@@ -23,7 +23,7 @@ export function useTheme() {
   const applied = useRef<Resolved | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
 
     const apply = async (m: ThemeMode) => {
       // The backend resolves "system" itself where the webview's media query
@@ -36,7 +36,7 @@ export function useTheme() {
       } catch (e) {
         console.error("Failed to set window theme", e);
       }
-      if (cancelled) return;
+      if (ac.signal.aborted) return;
 
       const theme = resolved ?? (m === "system" ? getSystemTheme() : m);
       applied.current = theme;
@@ -55,7 +55,7 @@ export function useTheme() {
         if (payload !== applied.current) apply(mode);
       })
       .then((fn) => {
-        if (cancelled) fn();
+        if (ac.signal.aborted) fn();
         else unlisten = fn;
       })
       .catch((e) => console.error("Failed to listen for theme changes", e));
@@ -67,7 +67,7 @@ export function useTheme() {
     mq.addEventListener("change", handler);
 
     return () => {
-      cancelled = true;
+      ac.abort();
       mq.removeEventListener("change", handler);
       unlisten?.();
     };

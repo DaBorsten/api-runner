@@ -27,7 +27,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
   }, [flush]);
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     let outputUnsub: UnlistenFn | undefined;
     let doneUnsub: UnlistenFn | undefined;
 
@@ -36,7 +36,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
       scheduleFlush();
     })
       .then((fn) => {
-        if (cancelled) fn();
+        if (ac.signal.aborted) fn();
         else {
           outputUnsub = fn;
           unlistenOutput.current = fn;
@@ -55,7 +55,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
       dispatch({ type: "RUN_DONE", payload: event.payload });
     })
       .then((fn) => {
-        if (cancelled) fn();
+        if (ac.signal.aborted) fn();
         else {
           doneUnsub = fn;
           unlistenDone.current = fn;
@@ -64,7 +64,7 @@ export function useNewmanRun(dispatch: React.Dispatch<AppAction>) {
       .catch((err) => console.error("[newman] done listener failed:", err));
 
     return () => {
-      cancelled = true;
+      ac.abort();
       if (rafId.current != null) {
         cancelAnimationFrame(rafId.current);
         rafId.current = null;
