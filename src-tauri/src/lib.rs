@@ -633,13 +633,11 @@ async fn fetch_collections(
     workspace_id: String,
 ) -> Result<Vec<Collection>, String> {
     let api_key = resolve_api_key(&api_key_id)?;
-    let url = format!(
-        "https://api.getpostman.com/collections?workspace={}",
-        workspace_id
-    );
+    let mut url = postman_api_url(&["collections"])?;
+    url.query_pairs_mut().append_pair("workspace", &workspace_id);
     let resp = state
         .http
-        .get(&url)
+        .get(url)
         .header("X-API-Key", &api_key)
         .send()
         .await
@@ -670,13 +668,11 @@ async fn fetch_environments(
     workspace_id: String,
 ) -> Result<Vec<Environment>, String> {
     let api_key = resolve_api_key(&api_key_id)?;
-    let url = format!(
-        "https://api.getpostman.com/environments?workspace={}",
-        workspace_id
-    );
+    let mut url = postman_api_url(&["environments"])?;
+    url.query_pairs_mut().append_pair("workspace", &workspace_id);
     let resp = state
         .http
-        .get(&url)
+        .get(url)
         .header("X-API-Key", &api_key)
         .send()
         .await
@@ -708,6 +704,16 @@ async fn export_environment(
     download_environment(&state.http, &api_key_id, &environment_uid, &runs_dir(&app)?).await
 }
 
+/// Build a Postman API URL with each segment percent-encoded, so a UID can't
+/// change the request path or add a query string.
+fn postman_api_url(segments: &[&str]) -> Result<reqwest::Url, String> {
+    let mut url = reqwest::Url::parse("https://api.getpostman.com").map_err(|e| e.to_string())?;
+    url.path_segments_mut()
+        .map_err(|_| "invalid base URL".to_string())?
+        .extend(segments);
+    Ok(url)
+}
+
 /// Fetch an environment from the Postman API and write it as a newman `-e`
 /// file into `dir`. Returns the file path.
 async fn download_environment(
@@ -717,12 +723,9 @@ async fn download_environment(
     dir: &Path,
 ) -> Result<String, String> {
     let api_key = resolve_api_key(api_key_id)?;
-    let url = format!(
-        "https://api.getpostman.com/environments/{}",
-        environment_uid
-    );
+    let url = postman_api_url(&["environments", environment_uid])?;
     let resp = http
-        .get(&url)
+        .get(url)
         .header("X-API-Key", &api_key)
         .send()
         .await
@@ -1172,10 +1175,10 @@ async fn fetch_collection_detail(
     collection_uid: String,
 ) -> Result<Vec<CollectionItem>, String> {
     let api_key = resolve_api_key(&api_key_id)?;
-    let url = format!("https://api.getpostman.com/collections/{}", collection_uid);
+    let url = postman_api_url(&["collections", &collection_uid])?;
     let resp = state
         .http
-        .get(&url)
+        .get(url)
         .header("X-API-Key", &api_key)
         .send()
         .await
@@ -1208,9 +1211,9 @@ async fn download_collection(
     dir: &Path,
 ) -> Result<String, String> {
     let api_key = resolve_api_key(api_key_id)?;
-    let url = format!("https://api.getpostman.com/collections/{}", collection_uid);
+    let url = postman_api_url(&["collections", collection_uid])?;
     let resp = http
-        .get(&url)
+        .get(url)
         .header("X-API-Key", &api_key)
         .send()
         .await

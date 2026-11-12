@@ -13,7 +13,8 @@ interface Props {
 }
 
 function cliCommand(name: string): string {
-  return `api-runner run "${name.replace(/"/g, '\\"')}"`;
+  // Escape everything that is special inside a POSIX double-quoted string.
+  return `api-runner run "${name.replace(/[\\"$`]/g, "\\$&")}"`;
 }
 
 export function PresetMenu({
